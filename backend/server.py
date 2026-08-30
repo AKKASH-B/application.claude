@@ -1,0 +1,1258 @@
+from fastapi import FastAPI, APIRouter, Depends, HTTPException, status
+from fastapi.responses import PlainTextResponse
+from dotenv import load_dotenv
+from starlette.middleware.cors import CORSMiddleware
+from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo import ReturnDocument
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+import bcrypt
+import jwt
+import os
+import re
+import hashlib
+import secrets
+import ipaddress
+import logging
+import httpx
+from html import escape
+from html.parser import HTMLParser
+from urllib.parse import urlparse
+from pathlib import Path
+from pydantic import BaseModel, EmailStr, Field, field_validator
+from typing import Any, List, Literal, Optional
+import uuid
+from datetime import datetime, timezone, timedelta
+
+
+ROOT_DIR = Path(__file__).parent
+load_dotenv(ROOT_DIR / '.env')
+
+# MongoDB connection
+mongo_url = os.environ['MONGO_URL']
+client = AsyncIOMotorClient(mongo_url)
+db = client[os.environ['DB_NAME']]
+JWT_SECRET = os.environ['JWT_SECRET']
+JWT_ALGORITHM = "HS256"
+TOKEN_MINUTES = 60 * 24 * 7
+CODE_MINUTES = 30
+bearer = HTTPBearer(auto_error=False)
+
+# Emergent-managed email (Resend) — base url is a CONSTANT (survives deploy).
+EMAIL_BASE_URL = "https://integrations.emergentagent.com"
+EMAIL_KEY = os.environ["EMERGENT_EMAIL_KEY"]
+EMAIL_FROM_NAME = os.environ.get("EMAIL_FROM_NAME", "SpendPulse")
+
+# Accounts always promoted to admin.
+ADMIN_USERNAMES = {u.strip().lower() for u in os.environ.get("ADMIN_USERNAMES", "").split(",") if u.strip()}
+ADMIN_PHONES = {p.strip() for p in os.environ.get("ADMIN_PHONES", "").split(",") if p.strip()}
+
+USERNAME_PATTERN = re.compile(r"^[a-zA-Z0-9_.]{3,30}$")
+
+logger = logging.getLogger(__name__)
+
+
+def normalize_username(value: str) -> str:
+    cleaned = (value or "").strip().lower()
+    if not USERNAME_PATTERN.match(cleaned):
+        raise ValueError("Username must be 3-30 characters (letters, numbers, dot, underscore).")
+    return cleaned
+
+
+def normalize_phone(value: str) -> str:
+    cleaned = re.sub(r"[\s\-()]", "", (value or "").strip())
+    prefix = ""
+    if cleaned.startswith("+"):
+        prefix = "+"
+        cleaned = cleaned[1:]
+    if not cleaned.isdigit() or not (8 <= len(cleaned) <= 15):
+        raise ValueError("Enter a valid phone number (8-15 digits).")
+    return prefix + cleaned
+
+
+def code_digest(code: str) -> str:
+    return hashlib.sha256(code.encode()).hexdigest()
+
+
+# Create the main app without a prefix
+app = FastAPI()
+
+# Create a router with the /api prefix
+api_router = APIRouter(prefix="/api")
+
+
+# Define Models
+class StatusCheck(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    client_name: str
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class StatusCheckCreate(BaseModel):
+    client_name: str
+
+
+class SignupInput(BaseModel):
+    username: str = Field(min_length=3, max_length=30)
+    phone: str
+    email: EmailStr
+    password: str = Field(min_length=8, max_length=128)
+    confirm_password: str = Field(min_length=8, max_length=128)
+
+    @field_validator("username")
+    @classmethod
+    def validate_username(cls, value: str) -> str:
+        return normalize_username(value)
+
+    @field_validator("phone")
+    @classmethod
+    def validate_phone(cls, value: str) -> str:
+        return normalize_phone(value)
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value: EmailStr) -> str:
+        return str(value).strip().lower()
+
+
+class LoginInput(BaseModel):
+    username: str = Field(min_length=3, max_length=30)
+    password: str = Field(min_length=1, max_length=128)
+
+    @field_validator("username")
+    @classmethod
+    def lower_username(cls, value: str) -> str:
+        return value.strip().lower()
+
+
+class VerifyEmailInput(BaseModel):
+    username: str = Field(min_length=3, max_length=30)
+    code: str = Field(pattern=r"^\d{6}$")
+
+    @field_validator("username")
+    @classmethod
+    def lower_username(cls, value: str) -> str:
+        return value.strip().lower()
+
+
+class UsernameInput(BaseModel):
+    username: str = Field(min_length=3, max_length=30)
+
+    @field_validator("username")
+    @classmethod
+    def lower_username(cls, value: str) -> str:
+        return value.strip().lower()
+
+
+class ResetPasswordInput(BaseModel):
+    username: str = Field(min_length=3, max_length=30)
+    code: str = Field(pattern=r"^\d{6}$")
+    new_password: str = Field(min_length=8, max_length=128)
+
+    @field_validator("username")
+    @classmethod
+    def lower_username(cls, value: str) -> str:
+        return value.strip().lower()
+
+
+class ChangePasswordInput(BaseModel):
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=8, max_length=128)
+
+
+class UserResponse(BaseModel):
+    id: str
+    username: str
+    phone: str
+    email: EmailStr
+    role: str = "user"
+    email_verified: bool = True
+
+
+class AdminUserSummary(BaseModel):
+    id: str
+    username: str
+    phone: str
+    email: EmailStr
+    role: str
+    disabled: bool
+    email_verified: bool
+    created_at: Optional[str] = None
+    transaction_count: int
+    balance: float
+
+
+class AdminSetDisabledInput(BaseModel):
+    disabled: bool
+
+
+class AdminTransactionUpdate(BaseModel):
+    type: Optional[Literal["expense", "income", "savings"]] = None
+    amount: Optional[float] = Field(default=None, gt=0)
+    category: Optional[str] = Field(default=None, min_length=1, max_length=40)
+    note: Optional[str] = Field(default=None, max_length=120)
+    date: Optional[str] = Field(default=None, min_length=10, max_length=10)
+
+    @field_validator("date")
+    @classmethod
+    def validate_date(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        try:
+            datetime.strptime(value, "%Y-%m-%d")
+        except ValueError as exc:
+            raise ValueError("date must be a valid YYYY-MM-DD date") from exc
+        return value
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
+
+
+class TransactionCreate(BaseModel):
+    type: Literal["expense", "income", "savings"]
+    amount: float = Field(gt=0)
+    category: str = Field(min_length=1, max_length=40)
+    note: Optional[str] = Field(default="", max_length=120)
+    date: str = Field(min_length=10, max_length=10)
+    goal_id: Optional[str] = Field(default=None, max_length=64)
+
+    @field_validator("date")
+    @classmethod
+    def validate_date(cls, value: str) -> str:
+        try:
+            datetime.strptime(value, "%Y-%m-%d")
+        except ValueError as exc:
+            raise ValueError("date must be a valid YYYY-MM-DD date") from exc
+        return value
+
+
+class Transaction(TransactionCreate):
+    id: str
+    created_at: str
+
+
+class BudgetUpsert(BaseModel):
+    category: str = Field(min_length=1, max_length=40)
+    monthly_limit: float = Field(gt=0)
+
+
+class Budget(BaseModel):
+    id: str
+    category: str
+    monthly_limit: float
+    updated_at: str
+
+
+class SavingsGoalCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=40)
+    target: float = Field(gt=0)
+    target_date: Optional[str] = Field(default=None)
+
+    @field_validator("target_date")
+    @classmethod
+    def validate_target_date(cls, value: Optional[str]) -> Optional[str]:
+        if value in (None, ""):
+            return None
+        try:
+            datetime.strptime(value, "%Y-%m-%d")
+        except ValueError as exc:
+            raise ValueError("target_date must be a valid YYYY-MM-DD date") from exc
+        return value
+
+
+class SavingsGoalUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=40)
+    target: Optional[float] = Field(default=None, gt=0)
+    target_date: Optional[str] = Field(default=None)
+    celebrated: Optional[bool] = None
+
+    @field_validator("target_date")
+    @classmethod
+    def validate_target_date(cls, value: Optional[str]) -> Optional[str]:
+        if value in (None, ""):
+            return value
+        try:
+            datetime.strptime(value, "%Y-%m-%d")
+        except ValueError as exc:
+            raise ValueError("target_date must be a valid YYYY-MM-DD date") from exc
+        return value
+
+
+class SavingsGoal(BaseModel):
+    id: str
+    name: str
+    target: float
+    target_date: Optional[str] = None
+    celebrated: bool = False
+    created_at: str
+    updated_at: str
+
+
+# ---------- Split / Friends models ----------
+SplitMode = Literal["equal", "unequal", "shares"]
+
+
+class FriendCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=40)
+    phone: Optional[str] = Field(default=None, max_length=20)
+
+    @field_validator("name")
+    @classmethod
+    def clean_name(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("phone")
+    @classmethod
+    def clean_phone(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+
+class Friend(BaseModel):
+    id: str
+    name: str
+    phone: Optional[str] = None
+    created_at: str
+
+
+class SplitMemberInput(BaseModel):
+    id: Optional[str] = Field(default=None, max_length=64)
+    name: str = Field(min_length=1, max_length=40)
+    phone: Optional[str] = Field(default=None, max_length=20)
+    share_value: float = Field(ge=0)
+    owed_amount: float = Field(ge=0)
+    settled: bool = False
+    is_payer: bool = False
+
+    @field_validator("name")
+    @classmethod
+    def clean_name(cls, value: str) -> str:
+        return value.strip()
+
+
+class SplitMember(BaseModel):
+    id: str
+    name: str
+    phone: Optional[str] = None
+    share_value: float
+    owed_amount: float
+    settled: bool
+    is_payer: bool
+
+
+class SplitSessionCreate(BaseModel):
+    total_amount: float = Field(gt=0)
+    note: Optional[str] = Field(default="", max_length=120)
+    mode: SplitMode
+    members: List[SplitMemberInput]
+    transaction_id: Optional[str] = Field(default=None, max_length=64)
+    create_transaction: bool = True
+    date: Optional[str] = Field(default=None, min_length=10, max_length=10)
+    category: Optional[str] = Field(default="Split", max_length=40)
+
+    @field_validator("members")
+    @classmethod
+    def validate_members(cls, value: List[SplitMemberInput]) -> List[SplitMemberInput]:
+        if len(value) < 2:
+            raise ValueError("A split needs at least 2 members")
+        if len(value) > 10:
+            raise ValueError("A split can have at most 10 members")
+        payers = [m for m in value if m.is_payer]
+        if len(payers) != 1:
+            raise ValueError("Exactly one member must be marked as the payer")
+        return value
+
+    @field_validator("date")
+    @classmethod
+    def validate_date(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        try:
+            datetime.strptime(value, "%Y-%m-%d")
+        except ValueError as exc:
+            raise ValueError("date must be a valid YYYY-MM-DD date") from exc
+        return value
+
+
+class SplitSessionUpdate(BaseModel):
+    total_amount: Optional[float] = Field(default=None, gt=0)
+    note: Optional[str] = Field(default=None, max_length=120)
+    mode: Optional[SplitMode] = None
+    members: Optional[List[SplitMemberInput]] = None
+
+    @field_validator("members")
+    @classmethod
+    def validate_members(cls, value: Optional[List[SplitMemberInput]]) -> Optional[List[SplitMemberInput]]:
+        if value is None:
+            return value
+        if len(value) < 2:
+            raise ValueError("A split needs at least 2 members")
+        if len(value) > 10:
+            raise ValueError("A split can have at most 10 members")
+        payers = [m for m in value if m.is_payer]
+        if len(payers) != 1:
+            raise ValueError("Exactly one member must be marked as the payer")
+        return value
+
+
+class SplitMemberSettleInput(BaseModel):
+    settled: bool
+
+
+class SplitSession(BaseModel):
+    id: str
+    total_amount: float
+    note: str = ""
+    mode: SplitMode
+    members: List[SplitMember]
+    transaction_id: Optional[str] = None
+    finalized: bool = False
+    created_at: str
+    updated_at: str
+
+
+def _round2(value: float) -> float:
+    return round(float(value) + 1e-9, 2)
+
+
+def _validate_split_math(total: float, mode: SplitMode, members: List[SplitMemberInput]) -> None:
+    total_owed = sum(m.owed_amount for m in members)
+    if abs(total_owed - total) > 0.011:
+        raise HTTPException(status_code=400, detail=f"Member amounts (₹{total_owed:.2f}) do not sum to total (₹{total:.2f})")
+    if mode == "shares":
+        total_shares = sum(m.share_value for m in members)
+        if total_shares <= 0:
+            raise HTTPException(status_code=400, detail="Total shares must be greater than zero")
+
+
+def _apply_members(members: List[SplitMemberInput]) -> List[dict]:
+    out: List[dict] = []
+    for m in members:
+        out.append({
+            "id": m.id or str(uuid.uuid4()),
+            "name": m.name,
+            "phone": m.phone,
+            "share_value": float(m.share_value),
+            "owed_amount": _round2(m.owed_amount),
+            "settled": bool(m.settled),
+            "is_payer": bool(m.is_payer),
+        })
+    return out
+
+
+def create_token(user_id: str) -> str:
+    now = datetime.now(timezone.utc)
+    return jwt.encode(
+        {"sub": user_id, "jti": str(uuid.uuid4()), "iat": now, "exp": now + timedelta(minutes=TOKEN_MINUTES)},
+        JWT_SECRET,
+        algorithm=JWT_ALGORITHM,
+    )
+
+
+def _is_admin_identity(doc: dict[str, Any]) -> bool:
+    return (doc.get("username") in ADMIN_USERNAMES) or (doc.get("phone") in ADMIN_PHONES)
+
+
+def _to_user_response(doc: dict[str, Any]) -> UserResponse:
+    return UserResponse(
+        id=doc["id"],
+        username=doc.get("username") or "user",
+        phone=doc.get("phone") or "",
+        email=doc["email"],
+        role=doc.get("role") or "user",
+        email_verified=bool(doc.get("email_verified", False)),
+    )
+
+
+async def _ensure_role(doc: dict[str, Any]) -> dict[str, Any]:
+    desired_role = "admin" if _is_admin_identity(doc) else (doc.get("role") or "user")
+    updates: dict[str, Any] = {}
+    if doc.get("role") != desired_role and desired_role == "admin":
+        updates["role"] = desired_role
+    if "disabled" not in doc:
+        updates["disabled"] = False
+    if updates:
+        await db.users.update_one({"id": doc["id"]}, {"$set": updates})
+        doc.update(updates)
+    doc.setdefault("role", desired_role)
+    doc.setdefault("disabled", False)
+    return doc
+
+
+async def current_user(credentials: HTTPAuthorizationCredentials | None = Depends(bearer)) -> dict[str, Any]:
+    if not credentials or credentials.scheme.lower() != "bearer":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+    try:
+        payload = jwt.decode(credentials.credentials, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        user_id = payload.get("sub")
+        if not user_id:
+            raise ValueError("missing user")
+    except (jwt.InvalidTokenError, ValueError):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
+    user = await db.users.find_one({"id": user_id}, {"_id": 0, "id": 1, "username": 1, "phone": 1, "email": 1, "role": 1, "disabled": 1, "email_verified": 1})
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User no longer exists")
+    if await db.revoked_tokens.find_one({"token": credentials.credentials}, {"_id": 0}):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session ended")
+    await _ensure_role(user)
+    if user.get("disabled"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This account has been disabled")
+    return user
+
+
+async def current_admin(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+    return user
+
+
+# ---------- Email guardrail gate (from playbook — do NOT weaken) ----------
+_SHORTENERS = ("bit.ly", "tinyurl.com", "t.co", "is.gd", "cutt.ly", "goo.gl", "rebrand.ly")
+_CRED_ASK = ("reply with your password", "reply with the code", "send your password", "cvv",
+             "send us your password", "enter your password below", "confirm your card number",
+             "your full card number", "seed phrase", "recovery phrase", "verify your card",
+             "social security number", "confirm your bank details")
+_HOSTISH = re.compile(r"\b(?:https?://)?((?:[a-z0-9-]+\.)+[a-z]{2,})", re.I)
+
+
+def _host_ok(host: str) -> bool:
+    if not host or "xn--" in host:
+        return False
+    try:
+        ipaddress.ip_address(host)
+        return False
+    except ValueError:
+        pass
+    return not any(host == s or host.endswith("." + s) for s in _SHORTENERS)
+
+
+def _same_site(shown: str, real: str) -> bool:
+    return shown == real or real.endswith("." + shown) or shown.endswith("." + real)
+
+
+class _EmailScan(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.tags, self.urls, self.anchors = set(), [], []
+        self._href, self._text = None, []
+
+    def handle_starttag(self, tag, attrs):
+        self.tags.add(tag.lower())
+        self.urls += [v for k, v in attrs if k.lower() in ("href", "src") and v]
+        if tag.lower() == "a":
+            self._href = dict((k.lower(), v) for k, v in attrs).get("href")
+            self._text = []
+
+    def handle_data(self, data):
+        if self._href is not None:
+            self._text.append(data)
+
+    def handle_endtag(self, tag):
+        if tag.lower() == "a" and self._href is not None:
+            self.anchors.append((self._href, "".join(self._text)))
+            self._href, self._text = None, []
+
+
+def _assert_safe_email(subject: str, html: str) -> None:
+    scan = _EmailScan(); scan.feed(html)
+    if scan.tags & {"form", "input", "textarea", "select"}:
+        raise ValueError("No forms or input fields in email (G2)")
+    body = f"{subject}\n{html}".lower()
+    for p in _CRED_ASK:
+        if p in body:
+            raise ValueError(f"Email asks the recipient for credentials: {p!r} (G2)")
+    for url in scan.urls:
+        low = url.strip().lower()
+        if low.startswith(("mailto:", "tel:", "cid:", "#")):
+            continue
+        if not low.startswith("https://"):
+            raise ValueError(f"Email links/assets must be absolute https: {url!r} (G3)")
+        host = urlparse(low).hostname or ""
+        if not _host_ok(host) or urlparse(low).username is not None:
+            raise ValueError(f"Shortened, numeric-host or credential-bearing URL: {url!r} (G3)")
+    for href, text in scan.anchors:
+        real = urlparse(href.strip().lower()).hostname or ""
+        if not real:
+            continue
+        for m in _HOSTISH.finditer(text):
+            if not _same_site(m.group(1).lower(), real):
+                raise ValueError(f"Anchor text {m.group(1)!r} != real link host {real!r} (G3)")
+
+
+async def send_email(*, to: str, subject: str, html: str) -> str | None:
+    _assert_safe_email(subject, html)
+    payload = {"to": [to], "subject": subject, "html": html, "from_name": EMAIL_FROM_NAME}
+    try:
+        async with httpx.AsyncClient(timeout=30) as http_client:
+            resp = await http_client.post(
+                f"{EMAIL_BASE_URL}/api/v1/email/send",
+                headers={"X-Email-Key": EMAIL_KEY},
+                json=payload,
+            )
+        resp.raise_for_status()
+        return resp.json().get("id")
+    except httpx.HTTPStatusError as e:
+        logger.error(f"Email send failed: {e.response.status_code} {e.response.text}")
+        raise HTTPException(status_code=502, detail="Failed to send email")
+    except Exception as e:
+        logger.error(f"Email send error: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to send email")
+
+
+def _code_email_html(username: str, code: str, purpose: str) -> tuple[str, str]:
+    action = "verify your email" if purpose == "verify" else "reset your password"
+    subject = f"Your {EMAIL_FROM_NAME} {'verification' if purpose == 'verify' else 'password reset'} code"
+    html = (
+        f'<table role="presentation" width="100%"><tr><td style="padding:24px;font-family:Arial,sans-serif;color:#1C1C1E">'
+        f'<h2 style="margin:0 0 12px">{escape(EMAIL_FROM_NAME)}</h2>'
+        f'<p>Hi {escape(username)},</p>'
+        f'<p>Use the code below in the {escape(EMAIL_FROM_NAME)} app to {action}. It expires in {CODE_MINUTES} minutes and can be used once.</p>'
+        f'<p style="font-size:26px;font-weight:800;letter-spacing:6px;background:#F3F3F0;padding:16px 22px;border-radius:10px;display:inline-block;font-family:monospace">{escape(code)}</p>'
+        f'<p style="font-size:12px;color:#888;margin-top:24px">If you did not request this, you can ignore this email. Sent by {escape(EMAIL_FROM_NAME)}. We will never ask for your password by email.</p>'
+        f'</td></tr></table>'
+    )
+    return subject, html
+
+
+async def _issue_code(user_id: str, purpose: str) -> str:
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=CODE_MINUTES)
+    await db.email_codes.delete_many({"user_id": user_id, "purpose": purpose})
+    await db.email_codes.insert_one({
+        "id": str(uuid.uuid4()),
+        "user_id": user_id,
+        "purpose": purpose,
+        "code_hash": code_digest(code),
+        "expires_at": expires_at,
+        "used": False,
+        "attempts": 0,
+        "created_at": datetime.now(timezone.utc),
+    })
+    return code
+
+
+async def _verify_code(user_id: str, purpose: str, code: str) -> None:
+    doc = await db.email_codes.find_one({"user_id": user_id, "purpose": purpose})
+    now = datetime.now(timezone.utc)
+    if not doc:
+        raise HTTPException(status_code=400, detail="Request a new code — none found.")
+    expires_at = doc["expires_at"]
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at <= now:
+        await db.email_codes.delete_one({"_id": doc["_id"]})
+        raise HTTPException(status_code=400, detail="Code expired — request a new one.")
+    if doc.get("attempts", 0) >= 6:
+        raise HTTPException(status_code=429, detail="Too many attempts — request a new code.")
+    await db.email_codes.update_one({"_id": doc["_id"]}, {"$inc": {"attempts": 1}})
+    if not secrets.compare_digest(code_digest(code), doc["code_hash"]):
+        raise HTTPException(status_code=400, detail="Incorrect code — please try again.")
+    await db.email_codes.delete_one({"_id": doc["_id"]})
+
+
+async def _send_verification(user: dict[str, Any]) -> None:
+    code = await _issue_code(user["id"], "verify")
+    subject, html = _code_email_html(user.get("username") or "there", code, "verify")
+    try:
+        await send_email(to=user["email"], subject=subject, html=html)
+    except HTTPException:
+        logger.warning("Verification email failed to send for %s", user.get("email"))
+
+
+# Add your routes to the router instead of directly to app
+@api_router.get("/")
+async def root():
+    return {"message": "Hello World"}
+
+
+@api_router.post("/auth/signup", status_code=201)
+async def signup(input: SignupInput):
+    if input.password != input.confirm_password:
+        raise HTTPException(status_code=400, detail="Passwords do not match.")
+    email = str(input.email)
+    if await db.users.find_one({"username": input.username}, {"_id": 0}):
+        raise HTTPException(status_code=409, detail="Username already taken.")
+    if await db.users.find_one({"email": email}, {"_id": 0}):
+        raise HTTPException(status_code=409, detail="Email already registered.")
+    role = "admin" if (input.username in ADMIN_USERNAMES or input.phone in ADMIN_PHONES) else "user"
+    user = {
+        "id": str(uuid.uuid4()),
+        "username": input.username,
+        "phone": input.phone,
+        "email": email,
+        "password_hash": bcrypt.hashpw(input.password.encode(), bcrypt.gensalt()).decode(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "role": role,
+        "disabled": False,
+        "email_verified": False,
+    }
+    await db.users.insert_one(user)
+    await _send_verification(user)
+    return {"ok": True, "username": user["username"], "email": email,
+            "message": "Account created. Check your email for a 6-digit verification code."}
+
+
+@api_router.post("/auth/verify-email", response_model=TokenResponse)
+async def verify_email(input: VerifyEmailInput):
+    user = await db.users.find_one({"username": input.username}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="Account not found.")
+    if user.get("email_verified"):
+        return TokenResponse(access_token=create_token(user["id"]), expires_in=TOKEN_MINUTES * 60)
+    await _verify_code(user["id"], "verify", input.code)
+    await db.users.update_one({"id": user["id"]}, {"$set": {"email_verified": True}})
+    return TokenResponse(access_token=create_token(user["id"]), expires_in=TOKEN_MINUTES * 60)
+
+
+@api_router.post("/auth/resend-verification")
+async def resend_verification(input: UsernameInput):
+    user = await db.users.find_one({"username": input.username}, {"_id": 0})
+    if user and not user.get("email_verified"):
+        await _send_verification(user)
+    return {"ok": True, "message": "If the account exists and is unverified, a new code was sent."}
+
+
+@api_router.post("/auth/login", response_model=TokenResponse)
+async def login(input: LoginInput):
+    user = await db.users.find_one({"username": input.username}, {"_id": 0})
+    valid = user and bcrypt.checkpw(input.password.encode(), user["password_hash"].encode())
+    if not valid:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect username or password")
+    await _ensure_role(user)
+    if user.get("disabled"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This account has been disabled")
+    if not user.get("email_verified"):
+        await _send_verification(user)
+        raise HTTPException(status_code=403, detail="EMAIL_NOT_VERIFIED")
+    return TokenResponse(access_token=create_token(user["id"]), expires_in=TOKEN_MINUTES * 60)
+
+
+@api_router.post("/auth/forgot-password")
+async def forgot_password(input: UsernameInput):
+    user = await db.users.find_one({"username": input.username}, {"_id": 0})
+    if user:
+        code = await _issue_code(user["id"], "reset")
+        subject, html = _code_email_html(user.get("username") or "there", code, "reset")
+        try:
+            await send_email(to=user["email"], subject=subject, html=html)
+        except HTTPException:
+            logger.warning("Reset email failed to send for %s", user.get("email"))
+    return {"ok": True, "message": "If that account exists, a reset code was emailed."}
+
+
+@api_router.post("/auth/reset-password", response_model=TokenResponse)
+async def reset_password(input: ResetPasswordInput):
+    user = await db.users.find_one({"username": input.username}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="Account not found.")
+    await _verify_code(user["id"], "reset", input.code)
+    new_hash = bcrypt.hashpw(input.new_password.encode(), bcrypt.gensalt()).decode()
+    await db.users.update_one({"id": user["id"]}, {"$set": {"password_hash": new_hash, "email_verified": True}})
+    return TokenResponse(access_token=create_token(user["id"]), expires_in=TOKEN_MINUTES * 60)
+
+
+@api_router.get("/me", response_model=UserResponse)
+async def me(user: dict[str, Any] = Depends(current_user)):
+    return _to_user_response(user)
+
+
+@api_router.post("/auth/logout")
+async def logout(credentials: HTTPAuthorizationCredentials | None = Depends(bearer), user: dict[str, Any] = Depends(current_user)):
+    if credentials:
+        try:
+            payload = jwt.decode(credentials.credentials, JWT_SECRET, algorithms=[JWT_ALGORITHM], options={"verify_exp": False})
+            await db.revoked_tokens.update_one({"token": credentials.credentials}, {"$set": {"token": credentials.credentials, "expires_at": datetime.fromtimestamp(payload["exp"], tz=timezone.utc)}}, upsert=True)
+        except (jwt.InvalidTokenError, KeyError):
+            pass
+    return {"ok": True, "user_id": user["id"]}
+
+
+@api_router.post("/auth/change-password")
+async def change_password(input: ChangePasswordInput, user: dict[str, Any] = Depends(current_user)):
+    if input.current_password == input.new_password:
+        raise HTTPException(status_code=400, detail="New password must be different from the current one")
+    stored = await db.users.find_one({"id": user["id"]}, {"_id": 0, "password_hash": 1})
+    if not stored or not bcrypt.checkpw(input.current_password.encode(), stored["password_hash"].encode()):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Current password is incorrect")
+    new_hash = bcrypt.hashpw(input.new_password.encode(), bcrypt.gensalt()).decode()
+    await db.users.update_one({"id": user["id"]}, {"$set": {"password_hash": new_hash}})
+    return {"ok": True}
+
+
+@api_router.post("/status", response_model=StatusCheck)
+async def create_status_check(input: StatusCheckCreate):
+    status_dict = input.dict()
+    status_obj = StatusCheck(**status_dict)
+    _ = await db.status_checks.insert_one(status_obj.dict())
+    return status_obj
+
+@api_router.get("/status", response_model=List[StatusCheck])
+async def get_status_checks():
+    status_checks = await db.status_checks.find({}, {"_id": 0}).to_list(1000)
+    return [StatusCheck(**status_check) for status_check in status_checks]
+
+
+@api_router.get("/transactions", response_model=List[Transaction])
+async def get_transactions(user: dict[str, Any] = Depends(current_user)):
+    docs = await db.transactions.find({"owner_id": user["id"]}, {"_id": 0, "owner_id": 0}).sort("date", -1).to_list(2000)
+    return [Transaction(**doc) for doc in docs]
+
+
+@api_router.get("/transactions/export", response_class=PlainTextResponse)
+async def export_transactions(month: Optional[str] = None, user: dict[str, Any] = Depends(current_user)):
+    query: dict[str, Any] = {"owner_id": user["id"]}
+    if month:
+        if not re.match(r"^\d{4}-\d{2}$", month):
+            raise HTTPException(status_code=400, detail="month must be YYYY-MM")
+        query["date"] = {"$regex": f"^{month}"}
+    docs = await db.transactions.find(query, {"_id": 0, "owner_id": 0}).sort("date", -1).to_list(5000)
+    lines = ["date,type,category,amount,note"]
+    for d in docs:
+        note = (d.get("note") or "").replace('"', '""')
+        lines.append(f'{d["date"]},{d["type"]},{d["category"]},{d["amount"]},"{note}"')
+    csv = "\n".join(lines) + "\n"
+    return PlainTextResponse(content=csv, media_type="text/csv", headers={"Content-Disposition": f'attachment; filename="spendpulse-{month or "all"}.csv"'})
+
+
+@api_router.post("/transactions", response_model=Transaction)
+async def create_transaction(input: TransactionCreate, user: dict[str, Any] = Depends(current_user)):
+    transaction = Transaction(
+        id=str(uuid.uuid4()),
+        created_at=datetime.now(timezone.utc).isoformat(),
+        **input.model_dump(),
+    )
+    await db.transactions.insert_one({**transaction.model_dump(), "owner_id": user["id"]})
+    return transaction
+
+
+@api_router.put("/transactions/{transaction_id}", response_model=Transaction)
+async def update_transaction(transaction_id: str, input: TransactionCreate, user: dict[str, Any] = Depends(current_user)):
+    updated = await db.transactions.find_one_and_update(
+        {"id": transaction_id, "owner_id": user["id"]},
+        {"$set": input.model_dump()},
+        return_document=ReturnDocument.AFTER,
+        projection={"_id": 0},
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    return Transaction(**updated)
+
+
+@api_router.delete("/transactions/{transaction_id}")
+async def delete_transaction(transaction_id: str, user: dict[str, Any] = Depends(current_user)):
+    result = await db.transactions.delete_one({"id": transaction_id, "owner_id": user["id"]})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    return {"ok": True}
+
+
+@api_router.get("/budgets", response_model=List[Budget])
+async def get_budgets(user: dict[str, Any] = Depends(current_user)):
+    docs = await db.budgets.find({"owner_id": user["id"]}, {"_id": 0, "owner_id": 0}).to_list(200)
+    return [Budget(**doc) for doc in docs]
+
+
+@api_router.put("/budgets", response_model=Budget)
+async def upsert_budget(input: BudgetUpsert, user: dict[str, Any] = Depends(current_user)):
+    now = datetime.now(timezone.utc).isoformat()
+    updated = await db.budgets.find_one_and_update(
+        {"owner_id": user["id"], "category": input.category},
+        {
+            "$set": {"monthly_limit": input.monthly_limit, "updated_at": now, "category": input.category},
+            "$setOnInsert": {"id": str(uuid.uuid4()), "owner_id": user["id"]},
+        },
+        upsert=True,
+        return_document=ReturnDocument.AFTER,
+        projection={"_id": 0, "owner_id": 0},
+    )
+    return Budget(**updated)
+
+
+@api_router.delete("/budgets/{category}")
+async def delete_budget(category: str, user: dict[str, Any] = Depends(current_user)):
+    result = await db.budgets.delete_one({"owner_id": user["id"], "category": category})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Budget not found")
+    return {"ok": True}
+
+
+@api_router.get("/savings-goals", response_model=List[SavingsGoal])
+async def get_savings_goals(user: dict[str, Any] = Depends(current_user)):
+    docs = await db.savings_goals.find({"owner_id": user["id"]}, {"_id": 0, "owner_id": 0}).sort("created_at", 1).to_list(100)
+    goals = []
+    for doc in docs:
+        doc.setdefault("name", "Savings goal")
+        doc.setdefault("celebrated", False)
+        doc.setdefault("created_at", doc.get("updated_at") or datetime.now(timezone.utc).isoformat())
+        doc.setdefault("updated_at", doc.get("created_at"))
+        goals.append(SavingsGoal(**doc))
+    return goals
+
+
+@api_router.post("/savings-goals", response_model=SavingsGoal)
+async def create_savings_goal(input: SavingsGoalCreate, user: dict[str, Any] = Depends(current_user)):
+    now = datetime.now(timezone.utc).isoformat()
+    goal = SavingsGoal(
+        id=str(uuid.uuid4()),
+        name=input.name,
+        target=input.target,
+        target_date=input.target_date,
+        celebrated=False,
+        created_at=now,
+        updated_at=now,
+    )
+    await db.savings_goals.insert_one({**goal.model_dump(), "owner_id": user["id"]})
+    return goal
+
+
+@api_router.put("/savings-goals/{goal_id}", response_model=SavingsGoal)
+async def update_savings_goal(goal_id: str, input: SavingsGoalUpdate, user: dict[str, Any] = Depends(current_user)):
+    changes = input.model_dump(exclude_unset=True)
+    changes["updated_at"] = datetime.now(timezone.utc).isoformat()
+    updated = await db.savings_goals.find_one_and_update(
+        {"id": goal_id, "owner_id": user["id"]},
+        {"$set": changes},
+        return_document=ReturnDocument.AFTER,
+        projection={"_id": 0, "owner_id": 0},
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="Savings goal not found")
+    return SavingsGoal(**updated)
+
+
+@api_router.delete("/savings-goals/{goal_id}")
+async def delete_savings_goal(goal_id: str, user: dict[str, Any] = Depends(current_user)):
+    result = await db.savings_goals.delete_one({"id": goal_id, "owner_id": user["id"]})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Savings goal not found")
+    await db.transactions.update_many(
+        {"owner_id": user["id"], "goal_id": goal_id},
+        {"$set": {"goal_id": None}},
+    )
+    return {"ok": True}
+
+# ---------- Admin ----------
+@api_router.get("/admin/users", response_model=List[AdminUserSummary])
+async def admin_list_users(admin: dict[str, Any] = Depends(current_admin)):
+    users = await db.users.find({}, {"_id": 0}).sort("created_at", 1).to_list(2000)
+    summaries: List[AdminUserSummary] = []
+    for u in users:
+        await _ensure_role(u)
+        txs = await db.transactions.find({"owner_id": u["id"]}, {"_id": 0, "type": 1, "amount": 1}).to_list(10000)
+        balance = sum(t["amount"] if t["type"] == "income" else (-t["amount"] if t["type"] == "expense" else 0) for t in txs)
+        summaries.append(AdminUserSummary(
+            id=u["id"], username=u.get("username") or "user", phone=u.get("phone") or "", email=u["email"],
+            role=u.get("role") or "user", disabled=bool(u.get("disabled")), email_verified=bool(u.get("email_verified", False)),
+            created_at=u.get("created_at"), transaction_count=len(txs), balance=balance,
+        ))
+    return summaries
+
+
+@api_router.put("/admin/users/{user_id}/disable")
+async def admin_set_disabled(user_id: str, input: AdminSetDisabledInput, admin: dict[str, Any] = Depends(current_admin)):
+    target = await db.users.find_one({"id": user_id}, {"_id": 0})
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    if target["id"] == admin["id"] and input.disabled:
+        raise HTTPException(status_code=400, detail="You can't disable your own account")
+    await db.users.update_one({"id": user_id}, {"$set": {"disabled": input.disabled}})
+    return {"ok": True, "disabled": input.disabled}
+
+
+@api_router.delete("/admin/users/{user_id}")
+async def admin_delete_user(user_id: str, admin: dict[str, Any] = Depends(current_admin)):
+    target = await db.users.find_one({"id": user_id}, {"_id": 0})
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    if target["id"] == admin["id"]:
+        raise HTTPException(status_code=400, detail="You can't delete your own account")
+    await db.users.delete_one({"id": user_id})
+    await db.transactions.delete_many({"owner_id": user_id})
+    await db.budgets.delete_many({"owner_id": user_id})
+    await db.savings_goals.delete_many({"owner_id": user_id})
+    await db.splits.delete_many({"owner_id": user_id})
+    await db.friends.delete_many({"owner_id": user_id})
+    await db.email_codes.delete_many({"user_id": user_id})
+    return {"ok": True}
+
+
+@api_router.get("/admin/users/{user_id}/transactions", response_model=List[Transaction])
+async def admin_user_transactions(user_id: str, admin: dict[str, Any] = Depends(current_admin)):
+    target = await db.users.find_one({"id": user_id}, {"_id": 0})
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    docs = await db.transactions.find({"owner_id": user_id}, {"_id": 0, "owner_id": 0}).sort("date", -1).to_list(5000)
+    return [Transaction(**doc) for doc in docs]
+
+
+@api_router.put("/admin/transactions/{transaction_id}", response_model=Transaction)
+async def admin_update_transaction(transaction_id: str, input: AdminTransactionUpdate, admin: dict[str, Any] = Depends(current_admin)):
+    changes = input.model_dump(exclude_unset=True)
+    if not changes:
+        raise HTTPException(status_code=400, detail="No changes provided")
+    updated = await db.transactions.find_one_and_update(
+        {"id": transaction_id},
+        {"$set": changes},
+        return_document=ReturnDocument.AFTER,
+        projection={"_id": 0, "owner_id": 0},
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    return Transaction(**updated)
+
+
+@api_router.delete("/admin/transactions/{transaction_id}")
+async def admin_delete_transaction(transaction_id: str, admin: dict[str, Any] = Depends(current_admin)):
+    result = await db.transactions.delete_one({"id": transaction_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    return {"ok": True}
+
+
+# ---------- Friends ----------
+@api_router.get("/friends", response_model=List[Friend])
+async def list_friends(user: dict[str, Any] = Depends(current_user)):
+    docs = await db.friends.find({"owner_id": user["id"]}, {"_id": 0, "owner_id": 0, "name_lower": 0}).sort("name", 1).to_list(500)
+    return [Friend(**doc) for doc in docs]
+
+
+@api_router.post("/friends", response_model=Friend)
+async def add_friend(input: FriendCreate, user: dict[str, Any] = Depends(current_user)):
+    normalized_name = input.name.strip().lower()
+    if not normalized_name:
+        raise HTTPException(status_code=400, detail="Name is required")
+    existing = await db.friends.find_one(
+        {"owner_id": user["id"], "name_lower": normalized_name},
+        {"_id": 0, "owner_id": 0, "name_lower": 0},
+    )
+    if existing:
+        return Friend(**existing)
+    friend = Friend(
+        id=str(uuid.uuid4()),
+        name=input.name,
+        phone=input.phone,
+        created_at=datetime.now(timezone.utc).isoformat(),
+    )
+    doc = friend.model_dump()
+    doc["owner_id"] = user["id"]
+    doc["name_lower"] = normalized_name
+    await db.friends.insert_one(doc)
+    return friend
+
+
+@api_router.delete("/friends/{friend_id}")
+async def remove_friend(friend_id: str, user: dict[str, Any] = Depends(current_user)):
+    result = await db.friends.delete_one({"id": friend_id, "owner_id": user["id"]})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Friend not found")
+    return {"ok": True}
+
+
+# ---------- Splits ----------
+async def _persist_friends_from_members(owner_id: str, members: List[dict]) -> None:
+    now_iso = datetime.now(timezone.utc).isoformat()
+    for m in members:
+        if m.get("is_payer"):
+            continue
+        name_lower = m["name"].strip().lower()
+        if not name_lower:
+            continue
+        existing = await db.friends.find_one({"owner_id": owner_id, "name_lower": name_lower}, {"_id": 0})
+        if existing:
+            if m.get("phone") and not existing.get("phone"):
+                await db.friends.update_one({"id": existing["id"]}, {"$set": {"phone": m["phone"]}})
+            continue
+        await db.friends.insert_one({
+            "id": str(uuid.uuid4()),
+            "owner_id": owner_id,
+            "name": m["name"],
+            "name_lower": name_lower,
+            "phone": m.get("phone"),
+            "created_at": now_iso,
+        })
+
+
+async def _serialize_split(doc: dict) -> SplitSession:
+    doc.pop("_id", None)
+    doc.pop("owner_id", None)
+    return SplitSession(**doc)
+
+
+@api_router.get("/splits", response_model=List[SplitSession])
+async def list_splits(user: dict[str, Any] = Depends(current_user)):
+    docs = await db.splits.find({"owner_id": user["id"]}, {"_id": 0, "owner_id": 0}).sort("created_at", -1).to_list(500)
+    return [SplitSession(**doc) for doc in docs]
+
+
+@api_router.get("/splits/{split_id}", response_model=SplitSession)
+async def get_split(split_id: str, user: dict[str, Any] = Depends(current_user)):
+    doc = await db.splits.find_one({"id": split_id, "owner_id": user["id"]}, {"_id": 0, "owner_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Split not found")
+    return SplitSession(**doc)
+
+
+@api_router.post("/splits", response_model=SplitSession, status_code=201)
+async def create_split(input: SplitSessionCreate, user: dict[str, Any] = Depends(current_user)):
+    _validate_split_math(input.total_amount, input.mode, input.members)
+    members = _apply_members(input.members)
+    now_iso = datetime.now(timezone.utc).isoformat()
+    tx_id: Optional[str] = input.transaction_id
+
+    if input.create_transaction and not tx_id:
+        payer = next((m for m in members if m["is_payer"]), None)
+        note_parts = ["Split"]
+        if payer:
+            note_parts.append(f"paid by {payer['name']}")
+        if input.note:
+            note_parts.append(input.note)
+        tx_doc = {
+            "id": str(uuid.uuid4()),
+            "type": "expense",
+            "amount": _round2(input.total_amount),
+            "category": (input.category or "Split").strip() or "Split",
+            "note": " · ".join(note_parts)[:120],
+            "date": input.date or datetime.now(timezone.utc).date().isoformat(),
+            "goal_id": None,
+            "created_at": now_iso,
+            "owner_id": user["id"],
+        }
+        await db.transactions.insert_one(tx_doc)
+        tx_id = tx_doc["id"]
+
+    split_doc = {
+        "id": str(uuid.uuid4()),
+        "owner_id": user["id"],
+        "total_amount": _round2(input.total_amount),
+        "note": input.note or "",
+        "mode": input.mode,
+        "members": members,
+        "transaction_id": tx_id,
+        "finalized": False,
+        "created_at": now_iso,
+        "updated_at": now_iso,
+    }
+    await db.splits.insert_one(split_doc)
+    await _persist_friends_from_members(user["id"], members)
+    return await _serialize_split(dict(split_doc))
+
+
+@api_router.put("/splits/{split_id}", response_model=SplitSession)
+async def update_split(split_id: str, input: SplitSessionUpdate, user: dict[str, Any] = Depends(current_user)):
+    existing = await db.splits.find_one({"id": split_id, "owner_id": user["id"]}, {"_id": 0})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Split not found")
+
+    new_total = input.total_amount if input.total_amount is not None else existing["total_amount"]
+    new_mode = input.mode if input.mode is not None else existing["mode"]
+    new_members_input = input.members
+    if new_members_input is not None:
+        _validate_split_math(new_total, new_mode, new_members_input)
+        new_members = _apply_members(new_members_input)
+    else:
+        new_members = existing["members"]
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    changes: dict[str, Any] = {
+        "total_amount": _round2(new_total),
+        "mode": new_mode,
+        "members": new_members,
+        "updated_at": now_iso,
+    }
+    if input.note is not None:
+        changes["note"] = input.note
+
+    tx_id = existing.get("transaction_id")
+    if tx_id:
+        payer = next((m for m in new_members if m.get("is_payer")), None)
+        note_parts = ["Split"]
+        if payer:
+            note_parts.append(f"paid by {payer['name']}")
+        if changes.get("note") or existing.get("note"):
+            note_parts.append(changes.get("note") if changes.get("note") is not None else existing.get("note"))
+        await db.transactions.update_one(
+            {"id": tx_id, "owner_id": user["id"]},
+            {"$set": {"amount": _round2(new_total), "note": " · ".join([p for p in note_parts if p])[:120]}},
+        )
+
+    updated = await db.splits.find_one_and_update(
+        {"id": split_id, "owner_id": user["id"]},
+        {"$set": changes},
+        return_document=ReturnDocument.AFTER,
+        projection={"_id": 0, "owner_id": 0},
+    )
+    if new_members_input is not None:
+        await _persist_friends_from_members(user["id"], new_members)
+    return SplitSession(**updated)
+
+
+@api_router.put("/splits/{split_id}/members/{member_id}/settle", response_model=SplitSession)
+async def toggle_split_member_settled(split_id: str, member_id: str, input: SplitMemberSettleInput, user: dict[str, Any] = Depends(current_user)):
+    existing = await db.splits.find_one({"id": split_id, "owner_id": user["id"]}, {"_id": 0})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Split not found")
+    members = existing["members"]
+    hit = False
+    for m in members:
+        if m["id"] == member_id:
+            m["settled"] = bool(input.settled)
+            hit = True
+            break
+    if not hit:
+        raise HTTPException(status_code=404, detail="Member not found in this split")
+    finalized = all(m.get("settled") or m.get("is_payer") for m in members)
+    updated = await db.splits.find_one_and_update(
+        {"id": split_id, "owner_id": user["id"]},
+        {"$set": {"members": members, "finalized": finalized, "updated_at": datetime.now(timezone.utc).isoformat()}},
+        return_document=ReturnDocument.AFTER,
+        projection={"_id": 0, "owner_id": 0},
+    )
+    return SplitSession(**updated)
+
+
+@api_router.delete("/splits/{split_id}")
+async def delete_split(split_id: str, user: dict[str, Any] = Depends(current_user)):
+    existing = await db.splits.find_one({"id": split_id, "owner_id": user["id"]}, {"_id": 0})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Split not found")
+    tx_id = existing.get("transaction_id")
+    await db.splits.delete_one({"id": split_id, "owner_id": user["id"]})
+    if tx_id:
+        await db.transactions.delete_one({"id": tx_id, "owner_id": user["id"]})
+    return {"ok": True}
+
+
+# Include the router in the main app
+app.include_router(api_router)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_credentials=True,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+
+
+@app.on_event("startup")
+async def _startup_indexes():
+    try:
+        await db.users.create_index("username", unique=True, partialFilterExpression={"username": {"$exists": True}})
+        await db.users.create_index("email", unique=True, partialFilterExpression={"email": {"$exists": True}})
+        await db.email_codes.create_index("expires_at", expireAfterSeconds=CODE_MINUTES * 60 + 120)
+        await db.email_codes.create_index([("user_id", 1), ("purpose", 1)])
+    except Exception as exc:  # pragma: no cover
+        logger.warning("Index creation skipped: %s", exc)
+
+
+@app.on_event("shutdown")
+async def shutdown_db_client():
+    client.close()

@@ -1,0 +1,33 @@
+{
+  "summary": "Iteration 11 e2e testing for SpendPulse (username+password auth with EMAIL verification gate, calculator in-place overlay fix, past-date entry via in-place calendar overlay, admin, reset). Backend: 12/12 pytest tests pass (signup 201, password mismatch 400, duplicate username 409, login gate returns 403 EMAIL_NOT_VERIFIED, verify-email via injected code returns access_token, login succeeds after verify, wrong password 401, admin login as akkash_saba / password123 has role=admin & email_verified=true, non-admin gets 403 on /admin/*, admin deletes user, forgot+reset via injected code lets user log in with new password, transaction persists past date (2024-08-05), CRUD, split create+delete cascades to linked transaction). Frontend: login as akkash_saba works; the add-transaction FAB opens the modal; the CALCULATOR is now an in-place overlay INSIDE that modal (no nested Modal) and 150×2= yields ₹300 which apply fills transaction-amount with 300; the DATE PICKER (calendar-widget) is likewise in-place, cal-prev navigates months and cal-day-YYYY-MM-DD selects a past date; saving the transaction persists the chosen past date and amount (verified via GET /api/transactions); the dashboard month automatically switches to the entry's month (June 2026 in test) showing 1 transactions and updated Total Balance. Signup UI shows verify-code / verify-submit / verify-resend and wrong code stays on screen. Forgot-password UI (reset-username / reset-send-code / reset-code / reset-password / reset-submit) opens correctly. tab-calendar and Analytics month-vs-month card render.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_iter11.py", "/app/test_reports/pytest/iter11.xml"],
+  "action_items": [
+    "Optional: migrate 'shadow*' style props to boxShadow — RN Web deprecation warning is noisy in console (not blocking).",
+    "Optional: the +html.tsx file exists at /app/frontend/app/+html.tsx — ensure it doesn't accidentally get exposed as a route (Expo Router treats it as HTML shell only)."
+  ],
+  "critical_code_review_comments": [
+    "server.py auth flow is correct: password hashing with bcrypt, verification codes hashed with sha256 + TTL index on email_codes.expires_at, per-code attempt cap (6), constant-time compare_digest. Good.",
+    "Login returns 403 detail='EMAIL_NOT_VERIFIED' as agreed contract; frontend switches to verify-code step on that exact detail.",
+    "Signup normalises username (lowercase, ^[a-zA-Z0-9_.]{3,30}$), phone digits 8-15, and lowercases email — matches Pydantic validators consistently.",
+    "Admin role is enforced both at signup and lazily via _ensure_role on login/verify — akkash_saba is promoted deterministically.",
+    "reset-password also flips email_verified=True which is a nice UX (user proved email ownership by receiving the code).",
+    "Calculator is now a plain in-place overlay (StyleSheet.absoluteFillObject) rendered by the parent — no nested <Modal>, which is what was breaking calculator + previous-date on the add-transaction modal. Good fix.",
+    "Calendar picker is rendered inline inside the add-transaction modal (no nested Modal). Good.",
+    "MongoDB _id excluded in all list/get projections; no leaks in API responses. Good.",
+    "Frontend uses process.env.EXPO_PUBLIC_BACKEND_URL consistently."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter11.py"],
+  "success_rate": {"backend": "100% (12/12)", "frontend": "100% (calculator overlay, past-date save+persist, verify-code UI, forgot UI, calendar & analytics tabs)"},
+  "seed_data_creation": "Created many TEST_/ui_ users through /api/auth/signup + injected verify/reset codes into db.email_codes with known hashes. One UI transaction saved to admin (akkash_saba) with note UI_PAST_2026-06-16_* on a past date.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Backend tests at /app/backend/tests/test_iter11.py (pytest, 12 tests). Admin login: akkash_saba / password123. To bypass the email-verify gate in tests, inject a code into MongoDB db.email_codes: purpose='verify' or 'reset', code_hash=sha256(b'123456').hexdigest(), expires_at now+10min, then call /api/auth/verify-email or /api/auth/reset-password. Calculator overlay uses testIDs calc-display, calc-key-<0-9|.|+|-|×|÷|=|C|±|%>, calc-apply, close-calculator. Calendar overlay uses calendar-widget, cal-prev, cal-next, cal-month-label, cal-day-YYYY-MM-DD.",
+  "rca_of_issue": "The two reported bugs were nested-Modal issues on Expo web/mobile: the Calculator and Date-picker were each rendered as their own <Modal> while the add-transaction <Modal> was already open. Nested modals on React Native (and RNWeb) frequently fail to receive taps because of z-index/portal ordering. E1 refactored both to plain absolute-positioned overlays (Calculator: StyleSheet.absoluteFillObject with justifyContent:flex-end; Calendar: rendered inline inside the add-transaction modal above the ScrollView). Verified end-to-end that 150×2=300 in the calculator applies to transaction-amount and that a past date selected via cal-prev + cal-day-YYYY-MM-DD saves with the exact chosen date and the dashboard month follows the entry."
+}

@@ -1,0 +1,29 @@
+{
+  "summary": "Iteration 12 e2e for SpendPulse focused on: (a) verified/unverified badge on dashboard and admin panel, (b) zero-balance UI fix, (c) Split add-member sheet with Contacts / New / Friends tabs. Backend: 7/7 pytest pass on /app/backend/tests/test_iter12.py (admin login as akkash_saba/password123 → access_token, /api/me returns email_verified=true & role=admin, /api/admin/users returns email_verified per user, wrong password 401, /api/admin/users without token 401, transactions CRUD with GET-verify, splits POST+GET+DELETE with the real schema total_amount/mode/share_value/owed_amount). Frontend (mobile viewport 390×844, EXPO_PUBLIC_BACKEND_URL): logged in as akkash_saba; dashboard renders verified-badge with 'Verified' text next to akkash@example.com; total-balance == '₹0' and low-balance-alert absent for the empty account (confirms epsilon fix); after adding a ₹175 expense the balance becomes '-₹175' and low-balance-alert renders — real negatives still work. Opened settings → open-admin-panel; admin-verify-akkash_saba pill shows 'Verified'. Split flow: navigated to /split/new, tapped add-member-btn, all three tabs render (add-member-tab-contacts default with graceful web fallback text 'Contact import works in the mobile app…' — NO crash; add-member-tab-manual works (submit-add-member added Alice then Bob); add-member-tab-friends renders friend-search). Filled split-total=500 and split-note=TEST_IT12_e2e, saved and landed on /split/{id} showing 3 members with equal shares ₹166.67. Regression: calculator overlay (open-calculator → calc-key-{1,5,0} → calc-apply) fills transaction-amount=150; date picker (open-date-picker) renders calendar-widget in-place inside add-transaction modal. All TEST_ data (1 txn + 1 split) cleaned up via API.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_iter12.py", "/app/test_reports/pytest/iter12.xml"],
+  "action_items": [
+    "Optional polish: the shadow* → boxShadow deprecation warning from RN Web is still noisy (non-blocking, carried over from iter 11).",
+    "Nice-to-have: on the add-transaction modal the date picker (calendar-widget) hides itself when open-date-picker is tapped again, but the same toggle from within an already-open state can look like a re-render — consider a dedicated close-date-picker testID for cleaner automation (not user-visible)."
+  ],
+  "critical_code_review_comments": [
+    "index.tsx line 91: `const balance = Math.abs(rawBalance) < 0.5 ? 0 : Math.round(rawBalance * 100) / 100;` is the correct epsilon-guard for the empty-account minus bug — confirmed empty account shows ₹0 while a real -175 expense correctly renders as -₹175 and triggers the low-balance-alert.",
+    "verified-badge / unverified-badge in dashboard header and admin-verify-<username> in admin cards both render correctly with proper icon+text (Feather check-circle/alert-circle + 'Verified'/'Unverified').",
+    "AddMemberSheet.tsx correctly branches on Platform.OS==='web' → perm='blocked' with a friendly fallback ('Contact import works in the mobile app…'); no expo-contacts native call is attempted on web, so no crash. Native path (getPermissionsAsync/requestPermissionsAsync → getContactsAsync) is only reachable on device, per Expo docs; recommend re-verifying on a real device / Expo Go for the granted/denied/blocked branches (cannot be exercised via web preview).",
+    "server.py splits schema is total_amount + mode + members[{share_value, owed_amount, is_payer}] — kept consistent with prior iterations; MongoDB _id excluded in list/get projections.",
+    "Frontend consistently uses process.env.EXPO_PUBLIC_BACKEND_URL. No hardcoded URLs."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter12.py", "/app/test_reports/pytest/iter12.xml", "/app/test_reports/iteration_12.json"],
+  "success_rate": {"backend": "100% (7/7)", "frontend": "100% (badge on dashboard + admin panel, ₹0 empty-account fix, real-negative still fires alert, AddMemberSheet 3 tabs render on web with contacts fallback, manual-add end-to-end save to /split/{id})"},
+  "seed_data_creation": "Created (and deleted) 1 TEST_IT12 expense and 1 TEST_IT12_e2e split via UI + backend for the empty→negative→cleanup verification. akkash_saba is back at 0 transactions / 0 splits at the end of the run.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Backend tests live at /app/backend/tests/test_iter12.py (pytest, 7 tests). Admin login: akkash_saba / password123. Dashboard testIDs: verified-badge, unverified-badge, total-balance, low-balance-alert, add-transaction-fab, open-calculator, calc-key-<n>, calc-apply, open-date-picker, calendar-widget, save-transaction, open-settings, open-admin-panel, admin-verify-<username>. Split testIDs: split-total, split-note, add-member-btn, add-member-tab-{contacts|manual|friends}, new-member-name, submit-add-member, save-split, split-error. Contact import via expo-contacts is NOT reachable on Expo web preview — it explicitly shows a fallback text 'Contact import works in the mobile app (Expo Go / installed build).' On device the sheet exposes allow-contacts + open-settings-contacts + contact-search + contact-row-<id>.",
+  "rca_of_issue": "The zero-balance minus was because the raw balance sum from empty transactions can be a tiny negative float artifact (e.g. -0.0 or floating-point residue) — epsilon guard |raw|<0.5 → 0 fixes it while preserving real negatives. The 'unverified minus' bug wasn't a business bug; it was a UI rendering artifact from `balance < 0 ? '-' + money(balance)` firing on -0. Fix in index.tsx line 91 verified end-to-end."
+}

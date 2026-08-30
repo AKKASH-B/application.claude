@@ -1,0 +1,31 @@
+{
+  "summary": "Iteration 10 e2e + API testing for SpendPulse (mobile+OTP auth, date-wise entry, calculator, calendar, split add/delete, admin delete). Backend: 8/8 pytest tests pass (send-otp returns demo_otp, signup/login/wrong-password/duplicate/mismatch/reset all correct, split create+delete cascades to linked transaction, friends add/list, date field persisted, admin access-control 403 for non-admin and admin-delete-user succeeds). Frontend UI smoke: signup flow with demo-otp-banner works and lands on dashboard; add-transaction sheet exposes open-date-picker and open-calculator (calc-display renders); Splits nav works; on /split/new the add-member-btn opens AddMemberSheet with add-member-tab-manual + new-member-name + submit-add-member and manual add works; save-split creates the split and routes to /split/{id}; split-delete opens the in-app confirm modal (confirm-delete-split) and the DELETE /splits/{id} call succeeds (verified via console + backend). All three reported bugs (add split member, delete split, admin delete user) are fixed end-to-end.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Delete split from detail screen", "issue": "After confirm-delete-split, the backend DELETE succeeds but router.back() logs 'The action GO_BACK was not handled by any navigator' if the user arrived at /split/[id] via router.replace (e.g. right after creating a split). Normal path (splits list -> detail -> delete) works. Consider router.replace('/splits') as a safe fallback in performDelete.", "affected_testIDs": ["split-delete","confirm-delete-split"]}
+    ],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_iter10.py", "/app/test_reports/pytest/iter10.xml"],
+  "action_items": [
+    "Optional: in /app/frontend/app/split/[id].tsx performDelete(), replace router.back() with `router.canGoBack() ? router.back() : router.replace('/splits')` to avoid the GO_BACK warning when the detail was reached via router.replace after create.",
+    "Console warns 'shadow* style props are deprecated. Use boxShadow.' repeatedly. Not blocking, but consider migrating shadow* styles to boxShadow in the split styles module."
+  ],
+  "critical_code_review_comments": [
+    "server.py uses Pydantic v2 field_validator + model_dump correctly; MongoDB _id is excluded on all list/get projections. Good.",
+    "Split DELETE endpoint correctly cascades linked transaction (verified).",
+    "Admin delete_user cleans up transactions/budgets/goals/splits/friends. Good.",
+    "OTP challenges are hashed and rate-limited (5 attempts) with TTL index. Good.",
+    "Frontend uses process.env.EXPO_PUBLIC_BACKEND_URL consistently."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter10.py"],
+  "success_rate": {"backend": "100%", "frontend": "~95% (all critical flows pass; only minor GO_BACK UX artifact on delete-just-after-create)"},
+  "seed_data_creation": "Signup created several TEST_* users via API + one UI signup (TEST_UI_User). Admin fixture (9876543210/password123) reused.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Backend tests live at /app/backend/tests/test_iter10.py (pytest). Admin login: 9876543210 / password123. Demo OTP is returned in send-otp response and shown in demo-otp-banner / reset-demo-otp banners. All three original bugs are verified fixed.",
+  "rca_of_issue": "Original bugs (can't add member, can't delete split, can't delete user) were caused by Alert.alert 2-button confirm callbacks not firing on Expo web. Main agent replaced those with dedicated in-app confirm Modals (confirm-delete-split, confirm-delete-user, confirm-delete-admin-tx) and a manual AddMemberSheet - all now function correctly on web preview."
+}
