@@ -37,9 +37,14 @@ TOKEN_MINUTES = 60 * 24 * 7
 CODE_MINUTES = 30
 bearer = HTTPBearer(auto_error=False)
 
-# Emergent-managed email (Resend) — base url is a CONSTANT (survives deploy).
-EMAIL_BASE_URL = "https://integrations.emergentagent.com"
-EMAIL_KEY = os.environ["EMERGENT_EMAIL_KEY"]
+# --- Email sending (Resend) ---
+# Sign up free at https://resend.com, verify your account, and create an API key.
+# Set RESEND_API_KEY as an environment variable wherever this app is deployed.
+# Without a verified custom domain, you can send from the sandbox address
+# "onboarding@resend.dev" to any recipient — perfect for getting started.
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
+RESEND_API_URL = "https://api.resend.com/emails"
+EMAIL_FROM = os.environ.get("EMAIL_FROM", "onboarding@resend.dev")
 EMAIL_FROM_NAME = os.environ.get("EMAIL_FROM_NAME", "SpendPulse")
 
 # Accounts always promoted to admin.
@@ -509,7 +514,7 @@ async def current_admin(user: dict[str, Any] = Depends(current_user)) -> dict[st
     return user
 
 
-# ---------- Email guardrail gate (from playbook — do NOT weaken) ----------
+# ---------- Email guardrail gate ----------
 _SHORTENERS = ("bit.ly", "tinyurl.com", "t.co", "is.gd", "cutt.ly", "goo.gl", "rebrand.ly")
 _CRED_ASK = ("reply with your password", "reply with the code", "send your password", "cvv",
              "send us your password", "enter your password below", "confirm your card number",
@@ -583,13 +588,27 @@ def _assert_safe_email(subject: str, html: str) -> None:
 
 
 async def send_email(*, to: str, subject: str, html: str) -> str | None:
+    """Send an email via Resend (https://resend.com). Requires RESEND_API_KEY."""
     _assert_safe_email(subject, html)
-    payload = {"to": [to], "subject": subject, "html": html, "from_name": EMAIL_FROM_NAME}
+
+    if not RESEND_API_KEY:
+        logger.warning("RESEND_API_KEY not set — skipping email send to %s", to)
+        return None
+
+    payload = {
+        "from": f"{EMAIL_FROM_NAME} <{EMAIL_FROM}>",
+        "to": [to],
+        "subject": subject,
+        "html": html,
+    }
     try:
         async with httpx.AsyncClient(timeout=30) as http_client:
             resp = await http_client.post(
-                f"{EMAIL_BASE_URL}/api/v1/email/send",
-                headers={"X-Email-Key": EMAIL_KEY},
+                RESEND_API_URL,
+                headers={
+                    "Authorization": f"Bearer {RESEND_API_KEY}",
+                    "Content-Type": "application/json",
+                },
                 json=payload,
             )
         resp.raise_for_status()
