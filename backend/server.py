@@ -10,15 +10,9 @@ import jwt
 import os
 import re
 import hashlib
-import secrets
-import ipaddress
 import logging
-import httpx
-from html import escape
-from html.parser import HTMLParser
-from urllib.parse import urlparse
 from pathlib import Path
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, Field, field_validator
 from typing import Any, List, Literal, Optional
 import uuid
 from datetime import datetime, timezone, timedelta
@@ -34,24 +28,14 @@ db = client[os.environ['DB_NAME']]
 JWT_SECRET = os.environ['JWT_SECRET']
 JWT_ALGORITHM = "HS256"
 TOKEN_MINUTES = 60 * 24 * 7
-CODE_MINUTES = 30
 bearer = HTTPBearer(auto_error=False)
-
-# --- Email sending (Resend) ---
-# Sign up free at https://resend.com, verify your account, and create an API key.
-# Set RESEND_API_KEY as an environment variable wherever this app is deployed.
-# Without a verified custom domain, you can send from the sandbox address
-# "onboarding@resend.dev" to any recipient — perfect for getting started.
-RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
-RESEND_API_URL = "https://api.resend.com/emails"
-EMAIL_FROM = os.environ.get("EMAIL_FROM", "onboarding@resend.dev")
-EMAIL_FROM_NAME = os.environ.get("EMAIL_FROM_NAME", "SpendPulse")
 
 # Accounts always promoted to admin.
 ADMIN_USERNAMES = {u.strip().lower() for u in os.environ.get("ADMIN_USERNAMES", "").split(",") if u.strip()}
 ADMIN_PHONES = {p.strip() for p in os.environ.get("ADMIN_PHONES", "").split(",") if p.strip()}
 
 USERNAME_PATTERN = re.compile(r"^[a-zA-Z0-9_.]{3,30}$")
+PIN_PATTERN = re.compile(r"^\d{6}$")
 
 logger = logging.getLogger(__name__)
 
@@ -74,8 +58,17 @@ def normalize_phone(value: str) -> str:
     return prefix + cleaned
 
 
-def code_digest(code: str) -> str:
-    return hashlib.sha256(code.encode()).hexdigest()
+def validate_pin(value: str) -> str:
+    cleaned = (value or "").strip()
+    if not PIN_PATTERN.match(cleaned):
+        raise ValueError("PIN must be exactly 6 digits.")
+    return cleaned
+
+
+def pin_digest(pin: str) -> str:
+    # Deterministic hash used only to check PIN uniqueness across users.
+    # (bcrypt hashes are salted, so they can't be compared directly for this.)
+    return hashlib.sha256(pin.encode()).hexdigest()
 
 
 # Create the main app without a prefix
@@ -98,9 +91,7 @@ class StatusCheckCreate(BaseModel):
 class SignupInput(BaseModel):
     username: str = Field(min_length=3, max_length=30)
     phone: str
-    email: EmailStr
-    password: str = Field(min_length=8, max_length=128)
-    confirm_password: str = Field(min_length=8, max_length=128)
+    pin: str = Field(min_length=6, max_length=6)
 
     @field_validator("username")
     @classmethod
@@ -109,77 +100,53 @@ class SignupInput(BaseModel):
 
     @field_validator("phone")
     @classmethod
-    def validate_phone(cls, value: str) -> str:
+    def validate_phone_field(cls, value: str) -> str:
         return normalize_phone(value)
 
-    @field_validator("email")
+    @field_validator("pin")
     @classmethod
-    def normalize_email(cls, value: EmailStr) -> str:
-        return str(value).strip().lower()
+    def validate_pin_field(cls, value: str) -> str:
+        return validate_pin(value)
 
 
 class LoginInput(BaseModel):
     username: str = Field(min_length=3, max_length=30)
-    password: str = Field(min_length=1, max_length=128)
+    pin: str = Field(min_length=6, max_length=6)
 
     @field_validator("username")
     @classmethod
     def lower_username(cls, value: str) -> str:
         return value.strip().lower()
 
-
-class VerifyEmailInput(BaseModel):
-    username: str = Field(min_length=3, max_length=30)
-    code: str = Field(pattern=r"^\d{6}$")
-
-    @field_validator("username")
+    @field_validator("pin")
     @classmethod
-    def lower_username(cls, value: str) -> str:
-        return value.strip().lower()
+    def validate_pin_field(cls, value: str) -> str:
+        return validate_pin(value)
 
 
-class UsernameInput(BaseModel):
-    username: str = Field(min_length=3, max_length=30)
+class ChangePinInput(BaseModel):
+    current_pin: str = Field(min_length=6, max_length=6)
+    new_pin: str = Field(min_length=6, max_length=6)
 
-    @field_validator("username")
+    @field_validator("current_pin", "new_pin")
     @classmethod
-    def lower_username(cls, value: str) -> str:
-        return value.strip().lower()
-
-
-class ResetPasswordInput(BaseModel):
-    username: str = Field(min_length=3, max_length=30)
-    code: str = Field(pattern=r"^\d{6}$")
-    new_password: str = Field(min_length=8, max_length=128)
-
-    @field_validator("username")
-    @classmethod
-    def lower_username(cls, value: str) -> str:
-        return value.strip().lower()
-
-
-class ChangePasswordInput(BaseModel):
-    current_password: str = Field(min_length=1, max_length=128)
-    new_password: str = Field(min_length=8, max_length=128)
+    def validate_pin_field(cls, value: str) -> str:
+        return validate_pin(value)
 
 
 class UserResponse(BaseModel):
     id: str
     username: str
     phone: str
-    email: EmailStr
     role: str = "user"
-    email_verified: bool = True
 
 
 class AdminUserSummary(BaseModel):
     id: str
     username: str
     phone: str
-    email: EmailStr
     role: str
     disabled: bool
-    email_verified: bool
     created_at: Optional[str] = None
     transaction_count: int
     balance: float
@@ -466,9 +433,7 @@ def _to_user_response(doc: dict[str, Any]) -> UserResponse:
         id=doc["id"],
         username=doc.get("username") or "user",
         phone=doc.get("phone") or "",
-        email=doc["email"],
         role=doc.get("role") or "user",
-        email_verified=bool(doc.get("email_verified", False)),
     )
 
 
@@ -497,7 +462,7 @@ async def current_user(credentials: HTTPAuthorizationCredentials | None = Depend
             raise ValueError("missing user")
     except (jwt.InvalidTokenError, ValueError):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
-    user = await db.users.find_one({"id": user_id}, {"_id": 0, "id": 1, "username": 1, "phone": 1, "email": 1, "role": 1, "disabled": 1, "email_verified": 1})
+    user = await db.users.find_one({"id": user_id}, {"_id": 0, "id": 1, "username": 1, "phone": 1, "role": 1, "disabled": 1})
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User no longer exists")
     if await db.revoked_tokens.find_one({"token": credentials.credentials}, {"_id": 0}):
@@ -514,262 +479,43 @@ async def current_admin(user: dict[str, Any] = Depends(current_user)) -> dict[st
     return user
 
 
-# ---------- Email guardrail gate ----------
-_SHORTENERS = ("bit.ly", "tinyurl.com", "t.co", "is.gd", "cutt.ly", "goo.gl", "rebrand.ly")
-_CRED_ASK = ("reply with your password", "reply with the code", "send your password", "cvv",
-             "send us your password", "enter your password below", "confirm your card number",
-             "your full card number", "seed phrase", "recovery phrase", "verify your card",
-             "social security number", "confirm your bank details")
-_HOSTISH = re.compile(r"\b(?:https?://)?((?:[a-z0-9-]+\.)+[a-z]{2,})", re.I)
-
-
-def _host_ok(host: str) -> bool:
-    if not host or "xn--" in host:
-        return False
-    try:
-        ipaddress.ip_address(host)
-        return False
-    except ValueError:
-        pass
-    return not any(host == s or host.endswith("." + s) for s in _SHORTENERS)
-
-
-def _same_site(shown: str, real: str) -> bool:
-    return shown == real or real.endswith("." + shown) or shown.endswith("." + real)
-
-
-class _EmailScan(HTMLParser):
-    def __init__(self):
-        super().__init__()
-        self.tags, self.urls, self.anchors = set(), [], []
-        self._href, self._text = None, []
-
-    def handle_starttag(self, tag, attrs):
-        self.tags.add(tag.lower())
-        self.urls += [v for k, v in attrs if k.lower() in ("href", "src") and v]
-        if tag.lower() == "a":
-            self._href = dict((k.lower(), v) for k, v in attrs).get("href")
-            self._text = []
-
-    def handle_data(self, data):
-        if self._href is not None:
-            self._text.append(data)
-
-    def handle_endtag(self, tag):
-        if tag.lower() == "a" and self._href is not None:
-            self.anchors.append((self._href, "".join(self._text)))
-            self._href, self._text = None, []
-
-
-def _assert_safe_email(subject: str, html: str) -> None:
-    scan = _EmailScan(); scan.feed(html)
-    if scan.tags & {"form", "input", "textarea", "select"}:
-        raise ValueError("No forms or input fields in email (G2)")
-    body = f"{subject}\n{html}".lower()
-    for p in _CRED_ASK:
-        if p in body:
-            raise ValueError(f"Email asks the recipient for credentials: {p!r} (G2)")
-    for url in scan.urls:
-        low = url.strip().lower()
-        if low.startswith(("mailto:", "tel:", "cid:", "#")):
-            continue
-        if not low.startswith("https://"):
-            raise ValueError(f"Email links/assets must be absolute https: {url!r} (G3)")
-        host = urlparse(low).hostname or ""
-        if not _host_ok(host) or urlparse(low).username is not None:
-            raise ValueError(f"Shortened, numeric-host or credential-bearing URL: {url!r} (G3)")
-    for href, text in scan.anchors:
-        real = urlparse(href.strip().lower()).hostname or ""
-        if not real:
-            continue
-        for m in _HOSTISH.finditer(text):
-            if not _same_site(m.group(1).lower(), real):
-                raise ValueError(f"Anchor text {m.group(1)!r} != real link host {real!r} (G3)")
-
-
-async def send_email(*, to: str, subject: str, html: str) -> str | None:
-    """Send an email via Resend (https://resend.com). Requires RESEND_API_KEY."""
-    _assert_safe_email(subject, html)
-
-    if not RESEND_API_KEY:
-        logger.warning("RESEND_API_KEY not set — skipping email send to %s", to)
-        return None
-
-    payload = {
-        "from": f"{EMAIL_FROM_NAME} <{EMAIL_FROM}>",
-        "to": [to],
-        "subject": subject,
-        "html": html,
-    }
-    try:
-        async with httpx.AsyncClient(timeout=30) as http_client:
-            resp = await http_client.post(
-                RESEND_API_URL,
-                headers={
-                    "Authorization": f"Bearer {RESEND_API_KEY}",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-            )
-        resp.raise_for_status()
-        return resp.json().get("id")
-    except httpx.HTTPStatusError as e:
-        logger.error(f"Email send failed: {e.response.status_code} {e.response.text}")
-        raise HTTPException(status_code=502, detail="Failed to send email")
-    except Exception as e:
-        logger.error(f"Email send error: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to send email")
-
-
-def _code_email_html(username: str, code: str, purpose: str) -> tuple[str, str]:
-    action = "verify your email" if purpose == "verify" else "reset your password"
-    subject = f"Your {EMAIL_FROM_NAME} {'verification' if purpose == 'verify' else 'password reset'} code"
-    html = (
-        f'<table role="presentation" width="100%"><tr><td style="padding:24px;font-family:Arial,sans-serif;color:#1C1C1E">'
-        f'<h2 style="margin:0 0 12px">{escape(EMAIL_FROM_NAME)}</h2>'
-        f'<p>Hi {escape(username)},</p>'
-        f'<p>Use the code below in the {escape(EMAIL_FROM_NAME)} app to {action}. It expires in {CODE_MINUTES} minutes and can be used once.</p>'
-        f'<p style="font-size:26px;font-weight:800;letter-spacing:6px;background:#F3F3F0;padding:16px 22px;border-radius:10px;display:inline-block;font-family:monospace">{escape(code)}</p>'
-        f'<p style="font-size:12px;color:#888;margin-top:24px">If you did not request this, you can ignore this email. Sent by {escape(EMAIL_FROM_NAME)}. We will never ask for your password by email.</p>'
-        f'</td></tr></table>'
-    )
-    return subject, html
-
-
-async def _issue_code(user_id: str, purpose: str) -> str:
-    code = f"{secrets.randbelow(1_000_000):06d}"
-    expires_at = datetime.now(timezone.utc) + timedelta(minutes=CODE_MINUTES)
-    await db.email_codes.delete_many({"user_id": user_id, "purpose": purpose})
-    await db.email_codes.insert_one({
-        "id": str(uuid.uuid4()),
-        "user_id": user_id,
-        "purpose": purpose,
-        "code_hash": code_digest(code),
-        "expires_at": expires_at,
-        "used": False,
-        "attempts": 0,
-        "created_at": datetime.now(timezone.utc),
-    })
-    return code
-
-
-async def _verify_code(user_id: str, purpose: str, code: str) -> None:
-    doc = await db.email_codes.find_one({"user_id": user_id, "purpose": purpose})
-    now = datetime.now(timezone.utc)
-    if not doc:
-        raise HTTPException(status_code=400, detail="Request a new code — none found.")
-    expires_at = doc["expires_at"]
-    if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
-    if expires_at <= now:
-        await db.email_codes.delete_one({"_id": doc["_id"]})
-        raise HTTPException(status_code=400, detail="Code expired — request a new one.")
-    if doc.get("attempts", 0) >= 6:
-        raise HTTPException(status_code=429, detail="Too many attempts — request a new code.")
-    await db.email_codes.update_one({"_id": doc["_id"]}, {"$inc": {"attempts": 1}})
-    if not secrets.compare_digest(code_digest(code), doc["code_hash"]):
-        raise HTTPException(status_code=400, detail="Incorrect code — please try again.")
-    await db.email_codes.delete_one({"_id": doc["_id"]})
-
-
-async def _send_verification(user: dict[str, Any]) -> None:
-    code = await _issue_code(user["id"], "verify")
-    subject, html = _code_email_html(user.get("username") or "there", code, "verify")
-    try:
-        await send_email(to=user["email"], subject=subject, html=html)
-    except HTTPException:
-        logger.warning("Verification email failed to send for %s", user.get("email"))
-
-
 # Add your routes to the router instead of directly to app
 @api_router.get("/")
 async def root():
     return {"message": "Hello World"}
 
 
-@api_router.post("/auth/signup", status_code=201)
+@api_router.post("/auth/signup", response_model=TokenResponse, status_code=201)
 async def signup(input: SignupInput):
-    if input.password != input.confirm_password:
-        raise HTTPException(status_code=400, detail="Passwords do not match.")
-    email = str(input.email)
     if await db.users.find_one({"username": input.username}, {"_id": 0}):
-        raise HTTPException(status_code=409, detail="Username already taken.")
-    if await db.users.find_one({"email": email}, {"_id": 0}):
-        raise HTTPException(status_code=409, detail="Email already registered.")
+        raise HTTPException(status_code=409, detail="Username already taken. Please choose another username.")
+    digest = pin_digest(input.pin)
+    if await db.users.find_one({"pin_digest": digest}, {"_id": 0}):
+        raise HTTPException(status_code=409, detail="This PIN is already in use. Please choose a different PIN.")
     role = "admin" if (input.username in ADMIN_USERNAMES or input.phone in ADMIN_PHONES) else "user"
     user = {
         "id": str(uuid.uuid4()),
         "username": input.username,
         "phone": input.phone,
-        "email": email,
-        "password_hash": bcrypt.hashpw(input.password.encode(), bcrypt.gensalt()).decode(),
+        "pin_hash": bcrypt.hashpw(input.pin.encode(), bcrypt.gensalt()).decode(),
+        "pin_digest": digest,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "role": role,
         "disabled": False,
-        "email_verified": False,
     }
     await db.users.insert_one(user)
-    await _send_verification(user)
-    return {"ok": True, "username": user["username"], "email": email,
-            "message": "Account created. Check your email for a 6-digit verification code."}
-
-
-@api_router.post("/auth/verify-email", response_model=TokenResponse)
-async def verify_email(input: VerifyEmailInput):
-    user = await db.users.find_one({"username": input.username}, {"_id": 0})
-    if not user:
-        raise HTTPException(status_code=404, detail="Account not found.")
-    if user.get("email_verified"):
-        return TokenResponse(access_token=create_token(user["id"]), expires_in=TOKEN_MINUTES * 60)
-    await _verify_code(user["id"], "verify", input.code)
-    await db.users.update_one({"id": user["id"]}, {"$set": {"email_verified": True}})
     return TokenResponse(access_token=create_token(user["id"]), expires_in=TOKEN_MINUTES * 60)
-
-
-@api_router.post("/auth/resend-verification")
-async def resend_verification(input: UsernameInput):
-    user = await db.users.find_one({"username": input.username}, {"_id": 0})
-    if user and not user.get("email_verified"):
-        await _send_verification(user)
-    return {"ok": True, "message": "If the account exists and is unverified, a new code was sent."}
 
 
 @api_router.post("/auth/login", response_model=TokenResponse)
 async def login(input: LoginInput):
     user = await db.users.find_one({"username": input.username}, {"_id": 0})
-    valid = user and bcrypt.checkpw(input.password.encode(), user["password_hash"].encode())
+    valid = user and bcrypt.checkpw(input.pin.encode(), user["pin_hash"].encode())
     if not valid:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect username or password")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect username or PIN")
     await _ensure_role(user)
     if user.get("disabled"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This account has been disabled")
-    if not user.get("email_verified"):
-        await _send_verification(user)
-        raise HTTPException(status_code=403, detail="EMAIL_NOT_VERIFIED")
-    return TokenResponse(access_token=create_token(user["id"]), expires_in=TOKEN_MINUTES * 60)
-
-
-@api_router.post("/auth/forgot-password")
-async def forgot_password(input: UsernameInput):
-    user = await db.users.find_one({"username": input.username}, {"_id": 0})
-    if user:
-        code = await _issue_code(user["id"], "reset")
-        subject, html = _code_email_html(user.get("username") or "there", code, "reset")
-        try:
-            await send_email(to=user["email"], subject=subject, html=html)
-        except HTTPException:
-            logger.warning("Reset email failed to send for %s", user.get("email"))
-    return {"ok": True, "message": "If that account exists, a reset code was emailed."}
-
-
-@api_router.post("/auth/reset-password", response_model=TokenResponse)
-async def reset_password(input: ResetPasswordInput):
-    user = await db.users.find_one({"username": input.username}, {"_id": 0})
-    if not user:
-        raise HTTPException(status_code=404, detail="Account not found.")
-    await _verify_code(user["id"], "reset", input.code)
-    new_hash = bcrypt.hashpw(input.new_password.encode(), bcrypt.gensalt()).decode()
-    await db.users.update_one({"id": user["id"]}, {"$set": {"password_hash": new_hash, "email_verified": True}})
     return TokenResponse(access_token=create_token(user["id"]), expires_in=TOKEN_MINUTES * 60)
 
 
@@ -789,15 +535,18 @@ async def logout(credentials: HTTPAuthorizationCredentials | None = Depends(bear
     return {"ok": True, "user_id": user["id"]}
 
 
-@api_router.post("/auth/change-password")
-async def change_password(input: ChangePasswordInput, user: dict[str, Any] = Depends(current_user)):
-    if input.current_password == input.new_password:
-        raise HTTPException(status_code=400, detail="New password must be different from the current one")
-    stored = await db.users.find_one({"id": user["id"]}, {"_id": 0, "password_hash": 1})
-    if not stored or not bcrypt.checkpw(input.current_password.encode(), stored["password_hash"].encode()):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Current password is incorrect")
-    new_hash = bcrypt.hashpw(input.new_password.encode(), bcrypt.gensalt()).decode()
-    await db.users.update_one({"id": user["id"]}, {"$set": {"password_hash": new_hash}})
+@api_router.post("/auth/change-pin")
+async def change_pin(input: ChangePinInput, user: dict[str, Any] = Depends(current_user)):
+    if input.current_pin == input.new_pin:
+        raise HTTPException(status_code=400, detail="New PIN must be different from the current one")
+    stored = await db.users.find_one({"id": user["id"]}, {"_id": 0, "pin_hash": 1})
+    if not stored or not bcrypt.checkpw(input.current_pin.encode(), stored["pin_hash"].encode()):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Current PIN is incorrect")
+    new_digest = pin_digest(input.new_pin)
+    if await db.users.find_one({"pin_digest": new_digest, "id": {"$ne": user["id"]}}, {"_id": 0}):
+        raise HTTPException(status_code=409, detail="This PIN is already in use. Please choose a different PIN.")
+    new_hash = bcrypt.hashpw(input.new_pin.encode(), bcrypt.gensalt()).decode()
+    await db.users.update_one({"id": user["id"]}, {"$set": {"pin_hash": new_hash, "pin_digest": new_digest}})
     return {"ok": True}
 
 
@@ -963,8 +712,8 @@ async def admin_list_users(admin: dict[str, Any] = Depends(current_admin)):
         txs = await db.transactions.find({"owner_id": u["id"]}, {"_id": 0, "type": 1, "amount": 1}).to_list(10000)
         balance = sum(t["amount"] if t["type"] == "income" else (-t["amount"] if t["type"] == "expense" else 0) for t in txs)
         summaries.append(AdminUserSummary(
-            id=u["id"], username=u.get("username") or "user", phone=u.get("phone") or "", email=u["email"],
-            role=u.get("role") or "user", disabled=bool(u.get("disabled")), email_verified=bool(u.get("email_verified", False)),
+            id=u["id"], username=u.get("username") or "user", phone=u.get("phone") or "",
+            role=u.get("role") or "user", disabled=bool(u.get("disabled")),
             created_at=u.get("created_at"), transaction_count=len(txs), balance=balance,
         ))
     return summaries
@@ -994,7 +743,6 @@ async def admin_delete_user(user_id: str, admin: dict[str, Any] = Depends(curren
     await db.savings_goals.delete_many({"owner_id": user_id})
     await db.splits.delete_many({"owner_id": user_id})
     await db.friends.delete_many({"owner_id": user_id})
-    await db.email_codes.delete_many({"user_id": user_id})
     return {"ok": True}
 
 
@@ -1265,9 +1013,7 @@ logging.basicConfig(
 async def _startup_indexes():
     try:
         await db.users.create_index("username", unique=True, partialFilterExpression={"username": {"$exists": True}})
-        await db.users.create_index("email", unique=True, partialFilterExpression={"email": {"$exists": True}})
-        await db.email_codes.create_index("expires_at", expireAfterSeconds=CODE_MINUTES * 60 + 120)
-        await db.email_codes.create_index([("user_id", 1), ("purpose", 1)])
+        await db.users.create_index("pin_digest", unique=True, partialFilterExpression={"pin_digest": {"$exists": True}})
     except Exception as exc:  # pragma: no cover
         logger.warning("Index creation skipped: %s", exc)
 

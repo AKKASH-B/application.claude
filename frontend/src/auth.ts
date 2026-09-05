@@ -1,9 +1,7 @@
 import { storage } from "@/src/utils/storage";
-
 const API = `${process.env.EXPO_PUBLIC_BACKEND_URL || ""}/api`;
 const TOKEN_KEY = "spendpulse-auth-token";
-
-export type User = { id: string; username: string; phone: string; email: string; role?: string; email_verified?: boolean };
+export type User = { id: string; username: string; phone: string; role?: string };
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const token = await storage.secureGet(TOKEN_KEY, null);
@@ -21,27 +19,19 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return body as T;
 }
 
-export type SignupInput = { username: string; phone: string; email: string; password: string; confirmPassword: string };
+export type SignupInput = { username: string; phone: string; pin: string };
 
 export async function signUp(input: SignupInput) {
-  return request<{ ok: boolean; username: string; email: string; message: string }>("/auth/signup", {
+  const result = await request<{ access_token: string }>("/auth/signup", {
     method: "POST",
-    body: JSON.stringify({ username: input.username, phone: input.phone, email: input.email, password: input.password, confirm_password: input.confirmPassword }),
+    body: JSON.stringify({ username: input.username, phone: input.phone, pin: input.pin }),
   });
-}
-
-export async function verifyEmail(username: string, code: string) {
-  const result = await request<{ access_token: string }>("/auth/verify-email", { method: "POST", body: JSON.stringify({ username, code }) });
   await storage.secureSet(TOKEN_KEY, result.access_token);
   return request<User>("/me");
 }
 
-export async function resendVerification(username: string) {
-  return request<{ ok: boolean; message: string }>("/auth/resend-verification", { method: "POST", body: JSON.stringify({ username }) });
-}
-
-export async function signIn(username: string, password: string) {
-  const result = await request<{ access_token: string }>("/auth/login", { method: "POST", body: JSON.stringify({ username, password }) });
+export async function signIn(username: string, pin: string) {
+  const result = await request<{ access_token: string }>("/auth/login", { method: "POST", body: JSON.stringify({ username, pin }) });
   await storage.secureSet(TOKEN_KEY, result.access_token);
   return request<User>("/me");
 }
@@ -56,14 +46,11 @@ export async function signOut() {
   try { await request("/auth/logout", { method: "POST" }); } finally { await storage.secureRemove(TOKEN_KEY); }
 }
 
-export async function forgotPassword(username: string) {
-  return request<{ ok: boolean; message: string }>("/auth/forgot-password", { method: "POST", body: JSON.stringify({ username }) });
-}
-
-export async function resetPassword(username: string, code: string, newPassword: string) {
-  const result = await request<{ access_token: string }>("/auth/reset-password", { method: "POST", body: JSON.stringify({ username, code, new_password: newPassword }) });
-  await storage.secureSet(TOKEN_KEY, result.access_token);
-  return request<User>("/me");
+export async function changePin(currentPin: string, newPin: string) {
+  return request<{ ok: boolean }>("/auth/change-pin", {
+    method: "POST",
+    body: JSON.stringify({ current_pin: currentPin, new_pin: newPin }),
+  });
 }
 
 export async function authorizedRequest<T>(path: string, init: RequestInit = {}) { return request<T>(path, init); }
