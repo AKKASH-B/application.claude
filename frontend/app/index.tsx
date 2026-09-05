@@ -8,12 +8,12 @@ import ImportSheet from "@/src/import/ImportSheet";
 import Calendar, { prettyDate, todayIso } from "@/src/components/Calendar";
 import Calculator from "@/src/components/Calculator";
 import { storage } from "@/src/utils/storage";
-import { authorizedRequest, forgotPassword, resendVerification, resetPassword, restoreSession, signIn, signOut, signUp, User, verifyEmail } from "@/src/auth";
+import { authorizedRequest, changePin, restoreSession, signIn, signOut, signUp, User } from "@/src/auth";
 
 type TxType = "expense" | "income" | "savings";
 type Transaction = { id: string; type: TxType; amount: number; category: string; note?: string; date: string; created_at: string; goal_id?: string | null };
 type Budget = { id: string; category: string; monthly_limit: number; updated_at: string };
-type AdminUser = { id: string; username: string; phone: string; email: string; role: string; disabled: boolean; email_verified?: boolean; created_at?: string | null; transaction_count: number; balance: number };
+type AdminUser = { id: string; username: string; phone: string; role: string; disabled: boolean; created_at?: string | null; transaction_count: number; balance: number };
 type SavingsGoal = { id: string; name: string; target: number; target_date?: string | null; celebrated: boolean; created_at: string; updated_at: string };
 const COLORS = { bg: "#F9F8F6", ink: "#1C1C1E", muted: "#777773", green: "#4A6B5D", pale: "#E5EBE8", card: "#FFFFFF", line: "#E5E4E0", red: "#B23B3B", gold: "#C28E38", negBalance: "#FF8A8A" };
 const TRANSFERRED_CATEGORIES = ["Food", "Transport", "Bills", "Rent", "Shopping", "Health", "Travel", "Other"];
@@ -201,7 +201,7 @@ function Dashboard({ user, onSignedOut }: { user: User; onSignedOut: () => void 
   }, [savingsGoals, savedByGoal, celebrateGoal, markCelebrated]);
 
   return <SafeAreaView style={styles.safe}><ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-    <View style={styles.top}><View style={{ flex: 1 }}><Text style={styles.eyebrow}>PERSONAL FINANCE</Text><Text style={styles.title}>Hi {user.username}</Text><View style={styles.profileMetaRow}>{user.email_verified ? <View testID="verified-badge" style={styles.verifiedPill}><Feather name="check-circle" size={11} color={COLORS.green} /><Text style={styles.verifiedPillText}>Verified</Text></View> : <View testID="unverified-badge" style={[styles.verifiedPill, styles.unverifiedPill]}><Feather name="alert-circle" size={11} color={COLORS.gold} /><Text style={[styles.verifiedPillText, { color: COLORS.gold }]}>Unverified</Text></View>}<Text style={styles.sectionSub} numberOfLines={1}>{user.email}</Text></View></View><View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}><Pressable testID="open-import" onPress={() => setImportOpen(true)} style={styles.importBtn}><Feather name="message-square" size={16} color={COLORS.green} /><Text style={styles.importBtnText}>SMS</Text></Pressable><Pressable testID="open-settings" onPress={() => setSettingsOpen(true)} style={styles.avatar}><Text style={styles.avatarText}>{user.username.slice(0, 2).toUpperCase()}</Text></Pressable></View></View>
+    <View style={styles.top}><View style={{ flex: 1 }}><Text style={styles.eyebrow}>PERSONAL FINANCE</Text><Text style={styles.title}>Hi {user.username}</Text><View style={styles.profileMetaRow}><Text style={styles.sectionSub} numberOfLines={1}>{user.phone}</Text></View></View><View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}><Pressable testID="open-import" onPress={() => setImportOpen(true)} style={styles.importBtn}><Feather name="message-square" size={16} color={COLORS.green} /><Text style={styles.importBtnText}>SMS</Text></Pressable><Pressable testID="open-settings" onPress={() => setSettingsOpen(true)} style={styles.avatar}><Text style={styles.avatarText}>{user.username.slice(0, 2).toUpperCase()}</Text></Pressable></View></View>
     <View style={styles.hero}><View style={styles.heroTop}><Text style={styles.heroLabel}>TOTAL BALANCE</Text><Feather name="more-horizontal" size={20} color="#B5C8BE" /></View><Text testID="total-balance" style={[styles.balance, balance < 0 && styles.balanceNeg]}>{balance < 0 ? "-" : ""}{money(balance)}</Text><View style={styles.delta}><Feather name="trending-up" size={13} color="#D7E8DE" /><Text style={styles.deltaText}>On track this month</Text></View><View style={styles.heroBottom}><Text style={styles.heroSmall}>Updated just now</Text><Text style={styles.heroSmall}>{transactions.length} transactions</Text></View></View>
     {overBudget.length > 0 && <View testID="budget-alert-banner" style={styles.alertBanner}><Feather name="alert-triangle" size={16} color={COLORS.red} /><Text style={styles.alertText}>Over budget on {overBudget.map((x) => x.category).join(", ")}</Text></View>}
     {balance < 0 && <View testID="low-balance-alert" style={styles.lowBalanceCard}><View style={styles.lowBalanceIcon}><Feather name="trending-down" size={18} color={COLORS.red} /></View><View style={{ flex: 1 }}><Text style={styles.lowBalanceTitle}>Balance is in the red</Text><Text style={styles.lowBalanceSub}>You’ve transferred {money(balance)} more than you’ve received. Ease up or add income to get back on track.</Text></View></View>}
@@ -285,7 +285,7 @@ function SettingsSheet({ visible, month, monthTransactions, isAdmin, onClose, on
           </Pressable>
           <Pressable testID="change-password" onPress={onChangePassword} style={styles.actionBtn}>
             <Feather name="lock" size={18} color={COLORS.ink} />
-            <Text style={styles.actionText}>Change password</Text>
+            <Text style={styles.actionText}>Change PIN</Text>
           </Pressable>
           {isAdmin && (
             <Pressable testID="open-admin-panel" onPress={onOpenAdmin} style={styles.actionBtn}>
@@ -311,10 +311,10 @@ function ChangePasswordSheet({ visible, onClose }: { visible: boolean; onClose: 
   const [ok, setOk] = useState(false);
   useEffect(() => { if (!visible) { setCurrent(""); setNext(""); setError(""); setOk(false); } }, [visible]);
   const submit = async () => {
-    if (!current || next.length < 8) { setError("Enter your current password and a new one (8+ characters)."); return; }
+    if (!/^\d{6}$/.test(current) || !/^\d{6}$/.test(next)) { setError("Enter your current 6-digit PIN and a new 6-digit PIN."); return; }
     setBusy(true); setError("");
     try {
-      await authorizedRequest("/auth/change-password", { method: "POST", body: JSON.stringify({ current_password: current, new_password: next }) });
+      await changePin(current, next);
       setOk(true);
       setTimeout(onClose, 900);
     } catch (e) { setError(e instanceof Error ? e.message : "Please try again."); }
@@ -325,17 +325,17 @@ function ChangePasswordSheet({ visible, onClose }: { visible: boolean; onClose: 
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.modalShade}>
         <View style={styles.modal}>
           <View style={styles.modalHead}>
-            <Text style={styles.modalTitle}>Change password</Text>
+            <Text style={styles.modalTitle}>Change PIN</Text>
             <Pressable testID="close-change-password" onPress={onClose}><Feather name="x" size={22} color={COLORS.muted} /></Pressable>
           </View>
-          <Text style={styles.inputLabel}>CURRENT PASSWORD</Text>
-          <TextInput testID="current-password" value={current} onChangeText={setCurrent} secureTextEntry placeholder="Your current password" placeholderTextColor="#A9AAA5" style={styles.input} />
-          <Text style={styles.inputLabel}>NEW PASSWORD</Text>
-          <TextInput testID="new-password" value={next} onChangeText={setNext} secureTextEntry placeholder="At least 8 characters" placeholderTextColor="#A9AAA5" style={styles.input} />
+          <Text style={styles.inputLabel}>CURRENT PIN</Text>
+          <TextInput testID="current-password" value={current} onChangeText={(v) => setCurrent(v.replace(/[^0-9]/g, "").slice(0, 6))} keyboardType="number-pad" secureTextEntry placeholder="6-digit PIN" placeholderTextColor="#A9AAA5" style={styles.input} maxLength={6} />
+          <Text style={styles.inputLabel}>NEW PIN</Text>
+          <TextInput testID="new-password" value={next} onChangeText={(v) => setNext(v.replace(/[^0-9]/g, "").slice(0, 6))} keyboardType="number-pad" secureTextEntry placeholder="6-digit PIN" placeholderTextColor="#A9AAA5" style={styles.input} maxLength={6} />
           {error ? <Text style={authStyles.authError}>{error}</Text> : null}
-          {ok ? <Text style={authStyles.authInfo}>Password updated.</Text> : null}
+          {ok ? <Text style={authStyles.authInfo}>PIN updated.</Text> : null}
           <Pressable testID="submit-change-password" onPress={submit} disabled={busy || ok} style={[styles.save, (busy || ok) && authStyles.disabled]}>
-            {busy ? <ActivityIndicator color="#FFF" /> : <Text style={styles.saveText}>Update password</Text>}
+            {busy ? <ActivityIndicator color="#FFF" /> : <Text style={styles.saveText}>Update PIN</Text>}
           </Pressable>
         </View>
       </KeyboardAvoidingView>
@@ -403,11 +403,7 @@ function AdminSheet({ visible, onClose }: { visible: boolean; onClose: () => voi
                       <View style={styles.rowBetween}>
                         <View style={{ flex: 1 }}>
                           <Text style={styles.cardTitleTight}>{u.username}{u.role === "admin" ? "  ·  admin" : ""}</Text>
-                          <Text style={styles.transactionSub}>{u.email}{u.phone ? `  ·  ${u.phone}` : ""}</Text>
-                          <View testID={`admin-verify-${u.username}`} style={[styles.verifiedPill, !u.email_verified && styles.unverifiedPill, { marginTop: 6 }]}>
-                            <Feather name={u.email_verified ? "check-circle" : "alert-circle"} size={11} color={u.email_verified ? COLORS.green : COLORS.gold} />
-                            <Text style={[styles.verifiedPillText, !u.email_verified && { color: COLORS.gold }]}>{u.email_verified ? "Verified" : "Unverified"}</Text>
-                          </View>
+                          <Text style={styles.transactionSub}>{u.phone}</Text>
                         </View>
                         {u.disabled && <View style={styles.goalBadge}><Text style={[styles.goalBadgeText, { color: COLORS.red }]}>Disabled</Text></View>}
                       </View>
@@ -441,7 +437,7 @@ function AdminSheet({ visible, onClose }: { visible: boolean; onClose: () => voi
                   <Text style={styles.modalTitle}>Delete user?</Text>
                   <Pressable testID="close-confirm-user" onPress={() => setConfirmUser(null)}><Feather name="x" size={22} color={COLORS.muted} /></Pressable>
                 </View>
-                <Text style={styles.emptyText}>This permanently deletes {confirmUser?.username} ({confirmUser?.email}) and all of their transactions, budgets, goals and splits. This can’t be undone.</Text>
+                <Text style={styles.emptyText}>This permanently deletes {confirmUser?.username} ({confirmUser?.phone}) and all of their transactions, budgets, goals and splits. This can’t be undone.</Text>
                 {deleteError ? <Text style={authStyles.authError}>{deleteError}</Text> : null}
                 <Pressable testID="confirm-delete-user" disabled={busyId === confirmUser?.id} onPress={performDeleteUser} style={[styles.save, { backgroundColor: COLORS.red }, busyId === confirmUser?.id && authStyles.disabled]}>
                   {busyId === confirmUser?.id ? <ActivityIndicator color="#FFF" /> : <Text style={styles.saveText}>Delete user</Text>}
@@ -626,66 +622,37 @@ function BudgetSheet({ category, currentLimit, onClose, onSave, onRemove }: { ca
 
 function AuthScreen({ onAuthenticated }: { onAuthenticated: (user: User) => void }) {
   const [mode, setMode] = useState<"login" | "signup">("login");
-  const [verifyUsername, setVerifyUsername] = useState<string | null>(null);
   const [username, setUsername] = useState("");
   const [phone, setPhone] = useState("");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [confirm, setConfirm] = useState("");
-  const [code, setCode] = useState("");
+  const [pin, setPin] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [info, setInfo] = useState("");
-  const [resetOpen, setResetOpen] = useState(false);
 
   const switchMode = () => {
     setMode(mode === "login" ? "signup" : "login");
-    setError(""); setInfo(""); setVerifyUsername(null); setCode(""); setConfirm("");
+    setError(""); setPin("");
   };
 
   const doLogin = async () => {
     const u = username.trim().toLowerCase();
     if (u.length < 3) { setError("Enter your username."); return; }
-    if (!password) { setError("Enter your password."); return; }
-    setBusy(true); setError(""); setInfo("");
-    try { const user = await signIn(u, password); onAuthenticated(user); }
-    catch (e) {
-      const err = e as Error & { detail?: string };
-      if (err.detail === "EMAIL_NOT_VERIFIED") { setVerifyUsername(u); setCode(""); setInfo("Please verify your email. We sent a fresh 6-digit code."); }
-      else setError(err.message || "Login failed");
-    } finally { setBusy(false); }
+    if (!/^\d{6}$/.test(pin)) { setError("Enter your 6-digit PIN."); return; }
+    setBusy(true); setError("");
+    try { const user = await signIn(u, pin); onAuthenticated(user); }
+    catch (e) { setError(e instanceof Error ? e.message : "Login failed"); }
+    finally { setBusy(false); }
   };
 
   const doSignup = async () => {
     const u = username.trim().toLowerCase();
     if (u.length < 3 || !/^[a-z0-9_.]+$/.test(u)) { setError("Username must be 3+ chars: letters, numbers, dot or underscore."); return; }
     if (phone.trim().length < 8) { setError("Enter a valid phone number."); return; }
-    if (!email.trim() || !email.includes("@")) { setError("Enter a valid email address."); return; }
-    if (password.length < 8) { setError("Password must be at least 8 characters."); return; }
-    if (password !== confirm) { setError("Passwords do not match."); return; }
-    setBusy(true); setError(""); setInfo("");
+    if (!/^\d{6}$/.test(pin)) { setError("PIN must be exactly 6 digits."); return; }
+    setBusy(true); setError("");
     try {
-      const res = await signUp({ username: u, phone: phone.trim(), email: email.trim().toLowerCase(), password, confirmPassword: confirm });
-      setVerifyUsername(res.username); setCode("");
-      setInfo("Account created! Enter the 6-digit code we emailed to " + email.trim().toLowerCase() + ".");
+      const user = await signUp({ username: u, phone: phone.trim(), pin });
+      onAuthenticated(user);
     } catch (e) { setError(e instanceof Error ? e.message : "Sign up failed"); }
-    finally { setBusy(false); }
-  };
-
-  const doVerify = async () => {
-    if (!verifyUsername) return;
-    if (!/^\d{6}$/.test(code.trim())) { setError("Enter the 6-digit code from your email."); return; }
-    setBusy(true); setError("");
-    try { const user = await verifyEmail(verifyUsername, code.trim()); onAuthenticated(user); }
-    catch (e) { setError(e instanceof Error ? e.message : "Verification failed"); }
-    finally { setBusy(false); }
-  };
-
-  const doResend = async () => {
-    if (!verifyUsername) return;
-    setBusy(true); setError("");
-    try { await resendVerification(verifyUsername); setInfo("A new code is on its way to your email."); }
-    catch (e) { setError(e instanceof Error ? e.message : "Couldn't resend"); }
     finally { setBusy(false); }
   };
 
@@ -694,114 +661,39 @@ function AuthScreen({ onAuthenticated }: { onAuthenticated: (user: User) => void
       <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} contentContainerStyle={authStyles.authContent}>
         <View style={authStyles.authBrand}><View style={authStyles.authMark}><Feather name="activity" size={22} color="#FFF" /></View><Text style={authStyles.authBrandText}>SpendPulse</Text></View>
         <View>
-          <Text style={authStyles.authEyebrow}>{verifyUsername ? "ONE LAST STEP" : mode === "login" ? "WELCOME BACK" : "START FRESH"}</Text>
-          <Text style={authStyles.authTitle}>{verifyUsername ? "Verify your email." : mode === "login" ? "Your money, in focus." : "Build a clearer money habit."}</Text>
+          <Text style={authStyles.authEyebrow}>{mode === "login" ? "WELCOME BACK" : "START FRESH"}</Text>
+          <Text style={authStyles.authTitle}>{mode === "login" ? "Your money, in focus." : "Build a clearer money habit."}</Text>
           <Text style={authStyles.authSub}>A calm, private view of your spending and monthly progress.</Text>
         </View>
         <View style={authStyles.authForm}>
-          {verifyUsername ? <>
-            <Text style={styles.inputLabel}>VERIFICATION CODE</Text>
-            <TextInput testID="verify-code" value={code} onChangeText={(v) => setCode(v.replace(/[^0-9]/g, "").slice(0, 6))} keyboardType="number-pad" placeholder="6-digit code" placeholderTextColor="#A9AAA5" style={[styles.input, { letterSpacing: 6, textAlign: "center", fontSize: 20 }]} maxLength={6} />
-            {info ? <Text style={authStyles.authInfo}>{info}</Text> : null}
-            {error ? <Text style={authStyles.authError}>{error}</Text> : null}
-            <Pressable testID="verify-submit" onPress={doVerify} disabled={busy} style={[styles.save, busy && authStyles.disabled]}>
-              {busy ? <ActivityIndicator color="#FFF" /> : <Text style={styles.saveText}>Verify & continue</Text>}
-            </Pressable>
-            <Pressable testID="verify-resend" onPress={doResend} disabled={busy} style={authStyles.linkRow}><Text style={authStyles.linkText}>Resend code</Text></Pressable>
-            <Pressable testID="verify-back" onPress={() => { setVerifyUsername(null); setError(""); setInfo(""); }} style={authStyles.linkRow}><Text style={authStyles.linkText}>Back</Text></Pressable>
-          </> : mode === "login" ? <>
+          {mode === "login" ? <>
             <Text style={styles.inputLabel}>USERNAME</Text>
             <TextInput testID="auth-username" value={username} onChangeText={setUsername} autoCapitalize="none" autoCorrect={false} placeholder="e.g. akkash_saba" placeholderTextColor="#A9AAA5" style={styles.input} />
-            <Text style={styles.inputLabel}>PASSWORD</Text>
-            <TextInput testID="auth-password" value={password} onChangeText={setPassword} secureTextEntry placeholder="Your password" placeholderTextColor="#A9AAA5" style={styles.input} />
-            {info ? <Text style={authStyles.authInfo}>{info}</Text> : null}
+            <Text style={styles.inputLabel}>PIN</Text>
+            <TextInput testID="auth-password" value={pin} onChangeText={(v) => setPin(v.replace(/[^0-9]/g, "").slice(0, 6))} keyboardType="number-pad" secureTextEntry placeholder="6-digit PIN" placeholderTextColor="#A9AAA5" style={[styles.input, { letterSpacing: 6 }]} maxLength={6} />
             {error ? <Text style={authStyles.authError}>{error}</Text> : null}
             <Pressable testID="auth-submit" onPress={doLogin} disabled={busy} style={[styles.save, busy && authStyles.disabled]}>
               {busy ? <ActivityIndicator color="#FFF" /> : <Text style={styles.saveText}>Log in</Text>}
             </Pressable>
-            <Pressable testID="auth-forgot" onPress={() => setResetOpen(true)} style={authStyles.linkRow}><Text style={authStyles.linkText}>Forgot password?</Text></Pressable>
           </> : <>
             <Text style={styles.inputLabel}>USERNAME</Text>
             <TextInput testID="auth-username" value={username} onChangeText={setUsername} autoCapitalize="none" autoCorrect={false} placeholder="e.g. akkash_saba" placeholderTextColor="#A9AAA5" style={styles.input} />
             <Text style={styles.inputLabel}>PHONE NUMBER</Text>
             <TextInput testID="auth-phone" value={phone} onChangeText={setPhone} keyboardType="phone-pad" placeholder="e.g. 9876543210" placeholderTextColor="#A9AAA5" style={styles.input} />
-            <Text style={styles.inputLabel}>EMAIL</Text>
-            <TextInput testID="auth-email" value={email} onChangeText={setEmail} autoCapitalize="none" autoCorrect={false} keyboardType="email-address" placeholder="you@example.com" placeholderTextColor="#A9AAA5" style={styles.input} />
-            <Text style={styles.inputLabel}>PASSWORD</Text>
-            <TextInput testID="auth-password" value={password} onChangeText={setPassword} secureTextEntry placeholder="At least 8 characters" placeholderTextColor="#A9AAA5" style={styles.input} />
-            <Text style={styles.inputLabel}>CONFIRM PASSWORD</Text>
-            <TextInput testID="auth-confirm" value={confirm} onChangeText={setConfirm} secureTextEntry placeholder="Re-enter password" placeholderTextColor="#A9AAA5" style={styles.input} />
+            <Text style={styles.inputLabel}>CREATE A 6-DIGIT PIN</Text>
+            <TextInput testID="auth-password" value={pin} onChangeText={(v) => setPin(v.replace(/[^0-9]/g, "").slice(0, 6))} keyboardType="number-pad" secureTextEntry placeholder="6-digit PIN" placeholderTextColor="#A9AAA5" style={[styles.input, { letterSpacing: 6 }]} maxLength={6} />
             {error ? <Text style={authStyles.authError}>{error}</Text> : null}
             <Pressable testID="auth-submit" onPress={doSignup} disabled={busy} style={[styles.save, busy && authStyles.disabled]}>
               {busy ? <ActivityIndicator color="#FFF" /> : <Text style={styles.saveText}>Create account</Text>}
             </Pressable>
           </>}
         </View>
-        {!verifyUsername ? (
-          <Pressable testID="auth-toggle" onPress={switchMode}>
-            <Text style={authStyles.authToggle}>{mode === "login" ? "New to SpendPulse? Create an account" : "Already have an account? Log in"}</Text>
-          </Pressable>
-        ) : <View />}
+        <Pressable testID="auth-toggle" onPress={switchMode}>
+          <Text style={authStyles.authToggle}>{mode === "login" ? "New to SpendPulse? Create an account" : "Already have an account? Log in"}</Text>
+        </Pressable>
       </ScrollView>
     </KeyboardAvoidingView>
-    <ResetPasswordSheet visible={resetOpen} onClose={() => setResetOpen(false)} onDone={onAuthenticated} />
   </SafeAreaView>;
-}
-
-function ResetPasswordSheet({ visible, onClose, onDone }: { visible: boolean; onClose: () => void; onDone: (u: User) => void }) {
-  const [username, setUsername] = useState("");
-  const [code, setCode] = useState("");
-  const [password, setPassword] = useState("");
-  const [sent, setSent] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [info, setInfo] = useState("");
-  useEffect(() => { if (!visible) { setUsername(""); setCode(""); setPassword(""); setSent(false); setError(""); setInfo(""); } }, [visible]);
-  const send = async () => {
-    if (username.trim().length < 3) { setError("Enter your username."); return; }
-    setBusy(true); setError(""); setInfo("");
-    try { const res = await forgotPassword(username.trim().toLowerCase()); setSent(true); setInfo(res.message); }
-    catch (e) { setError(e instanceof Error ? e.message : "Couldn't send code"); }
-    finally { setBusy(false); }
-  };
-  const submit = async () => {
-    if (!/^\d{6}$/.test(code.trim())) { setError("Enter the 6-digit code from your email."); return; }
-    if (password.length < 8) { setError("New password must be at least 8 characters."); return; }
-    setBusy(true); setError("");
-    try { const user = await resetPassword(username.trim().toLowerCase(), code.trim(), password); onDone(user); }
-    catch (e) { setError(e instanceof Error ? e.message : "Please try again."); }
-    finally { setBusy(false); }
-  };
-  return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.modalShade}>
-        <View style={styles.modal}>
-          <View style={styles.modalHead}>
-            <Text style={styles.modalTitle}>Reset password</Text>
-            <Pressable testID="close-reset" onPress={onClose}><Feather name="x" size={22} color={COLORS.muted} /></Pressable>
-          </View>
-          <Text style={styles.emptyText}>Enter your username. We&rsquo;ll email a 6-digit reset code to the address on your account.</Text>
-          <Text style={styles.inputLabel}>USERNAME</Text>
-          <TextInput testID="reset-username" value={username} onChangeText={setUsername} autoCapitalize="none" placeholder="e.g. akkash_saba" placeholderTextColor="#A9AAA5" style={styles.input} editable={!sent} />
-          {!sent ? (
-            <Pressable testID="reset-send-code" onPress={send} disabled={busy} style={[styles.save, busy && authStyles.disabled]}>
-              {busy ? <ActivityIndicator color="#FFF" /> : <Text style={styles.saveText}>Email me a code</Text>}
-            </Pressable>
-          ) : <>
-            <Text style={styles.inputLabel}>RESET CODE</Text>
-            <TextInput testID="reset-code" value={code} onChangeText={(v) => setCode(v.replace(/[^0-9]/g, "").slice(0, 6))} keyboardType="number-pad" placeholder="6-digit code" placeholderTextColor="#A9AAA5" style={styles.input} maxLength={6} />
-            <Text style={styles.inputLabel}>NEW PASSWORD</Text>
-            <TextInput testID="reset-password" value={password} onChangeText={setPassword} secureTextEntry placeholder="At least 8 characters" placeholderTextColor="#A9AAA5" style={styles.input} />
-            <Pressable testID="reset-submit" onPress={submit} disabled={busy} style={[styles.save, busy && authStyles.disabled]}>
-              {busy ? <ActivityIndicator color="#FFF" /> : <Text style={styles.saveText}>Update password</Text>}
-            </Pressable>
-          </>}
-          {info ? <Text style={authStyles.authInfo}>{info}</Text> : null}
-          {error ? <Text style={authStyles.authError}>{error}</Text> : null}
-        </View>
-      </KeyboardAvoidingView>
-    </Modal>
-  );
 }
 
 function ProgressRing({ pct, size = 96, stroke = 10, color = COLORS.gold }: { pct: number; size?: number; stroke?: number; color?: string }) {
