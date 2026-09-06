@@ -57,6 +57,7 @@ function Dashboard({ user, onSignedOut }: { user: User; onSignedOut: () => void 
   const [goalSheetOpen, setGoalSheetOpen] = useState(false);
   const [editingGoal, setEditingGoal] = useState<SavingsGoal | null>(null);
   const [celebrateGoal, setCelebrateGoal] = useState<SavingsGoal | null>(null);
+  const [splitPrompt, setSplitPrompt] = useState<{ amount: number; note: string } | null>(null);
   const [form, setForm] = useState({ amount: "", category: "Food", note: "", type: "expense" as TxType, goalId: null as string | null, date: todayIso() });
   const [calcOpen, setCalcOpen] = useState(false);
   const [datePickerOpen, setDatePickerOpen] = useState(false);
@@ -122,19 +123,7 @@ function Dashboard({ user, onSignedOut }: { user: User; onSignedOut: () => void 
         setMonth(created.date.slice(0, 7));
         closeEditor();
         if (created.type === "expense") {
-          setTimeout(() => {
-            Alert.alert(
-              "Split this amount?",
-              `Divide ${money(created.amount)} between friends and track who owes what.`,
-              [
-                { text: "Not now", style: "cancel" },
-                {
-                  text: "Split it",
-                  onPress: () => router.push({ pathname: "/split/new", params: { amount: String(created.amount), note: created.note || created.category } }),
-                },
-              ],
-            );
-          }, 250);
+          setSplitPrompt({ amount: created.amount, note: created.note || created.category });
         }
       }
     } catch { Alert.alert("Couldn’t save", "Please try again."); }
@@ -224,6 +213,32 @@ function Dashboard({ user, onSignedOut }: { user: User; onSignedOut: () => void 
     </>}
   </ScrollView><View style={styles.bottom}><Nav icon="grid" label="Overview" active={tab === "Overview"} onPress={() => setTab("Overview")} /><Nav icon="bar-chart-2" label="Analytics" active={tab === "Analytics"} onPress={() => setTab("Analytics")} /><Pressable testID="add-transaction-fab" style={styles.fab} onPress={openAdd}><Feather name="plus" size={24} color="#FFF" /></Pressable><Nav icon="users" label="Splits" active={false} onPress={() => router.push("/splits")} /><Nav icon="settings" label="Settings" active={false} onPress={() => setSettingsOpen(true)} /></View>
     <Modal visible={editorOpen} transparent animationType="slide" onRequestClose={closeEditor}><KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.modalShade}><View style={[styles.modal, { maxHeight: "92%" }]}><ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} contentContainerStyle={{ gap: 12, paddingBottom: 8 }}><View style={styles.modalHead}><Text style={styles.modalTitle}>{editing ? "Edit transaction" : "Add transaction"}</Text><Pressable testID="close-add-transaction" onPress={closeEditor}><Feather name="x" size={22} color={COLORS.muted} /></Pressable></View><View style={styles.typeRow}><Pressable testID="type-expense" onPress={() => chooseType("expense")} style={[styles.type, form.type === "expense" && styles.typeExpense]}><Text style={[styles.typeText, form.type === "expense" && { color: COLORS.red }]} numberOfLines={1}>Transferred</Text></Pressable><Pressable testID="type-income" onPress={() => chooseType("income")} style={[styles.type, form.type === "income" && styles.typeIncome]}><Text style={[styles.typeText, form.type === "income" && { color: COLORS.green }]} numberOfLines={1}>Received</Text></Pressable><Pressable testID="type-savings" onPress={() => chooseType("savings")} style={[styles.type, form.type === "savings" && styles.typeSavings]}><Text style={[styles.typeText, form.type === "savings" && { color: COLORS.gold }]} numberOfLines={1}>Savings</Text></Pressable></View><Text style={styles.inputLabel}>AMOUNT</Text><View style={styles.amountRow}><TextInput testID="transaction-amount" value={form.amount} onChangeText={(amount) => setForm({ ...form, amount })} keyboardType="decimal-pad" placeholder="₹ 0" placeholderTextColor="#A9AAA5" style={[styles.input, { flex: 1 }]} /><Pressable testID="open-calculator" onPress={() => setCalcOpen(true)} style={styles.calcBtn}><MaterialCommunityIcons name="calculator-variant-outline" size={22} color={COLORS.green} /></Pressable></View><Text style={styles.inputLabel}>DATE</Text><Pressable testID="open-date-picker" onPress={() => setDatePickerOpen(true)} style={styles.dateField}><Feather name="calendar" size={18} color={COLORS.green} /><Text style={styles.dateFieldText}>{prettyDate(form.date)}</Text><Feather name="chevron-down" size={18} color={COLORS.muted} /></Pressable>{form.type === "savings" && savingsGoals.length > 0 ? <><Text style={styles.inputLabel}>ADD TO GOAL</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>{savingsGoals.map((g) => <Pressable testID={`goal-chip-${g.id}`} key={g.id} onPress={() => setForm({ ...form, goalId: g.id, category: g.name })} style={[styles.chip, form.goalId === g.id && styles.chipActive]}><Text style={[styles.chipText, form.goalId === g.id && styles.chipTextActive]}>{g.name}</Text></Pressable>)}<Pressable testID="goal-chip-general" onPress={() => setForm({ ...form, goalId: null, category: "General" })} style={[styles.chip, form.goalId === null && styles.chipActive]}><Text style={[styles.chipText, form.goalId === null && styles.chipTextActive]}>General</Text></Pressable></ScrollView></> : <><Text style={styles.inputLabel}>CATEGORY</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>{categoriesFor(form.type).map((c) => <Pressable testID={`category-${c.toLowerCase().replace(/\s+/g, "-")}`} key={c} onPress={() => setForm({ ...form, category: c })} style={[styles.chip, form.category === c && styles.chipActive]}><Text style={[styles.chipText, form.category === c && styles.chipTextActive]}>{c}</Text></Pressable>)}</ScrollView></>}<Text style={styles.inputLabel}>NOTE</Text><TextInput value={form.note} onChangeText={(note) => setForm({ ...form, note })} placeholder="Optional note" placeholderTextColor="#A9AAA5" style={styles.input} /><Pressable testID="save-transaction" onPress={submitTransaction} style={styles.save}><Text style={styles.saveText}>{editing ? "Save changes" : "Save transaction"}</Text></Pressable></ScrollView></View>
+    <Modal visible={!!splitPrompt} transparent animationType="fade" onRequestClose={() => setSplitPrompt(null)}>
+      <Pressable style={styles.modalShade} onPress={() => setSplitPrompt(null)}>
+        <Pressable style={styles.modal} onPress={(e) => e.stopPropagation()}>
+          <View style={styles.modalHead}>
+            <Text style={styles.modalTitle}>Split this amount?</Text>
+            <Pressable testID="close-split-prompt" onPress={() => setSplitPrompt(null)}><Feather name="x" size={22} color={COLORS.muted} /></Pressable>
+          </View>
+          <Text style={styles.emptyText}>{splitPrompt ? `Divide ${money(splitPrompt.amount)} between friends and track who owes what.` : ""}</Text>
+          <Pressable
+            testID="split-prompt-confirm"
+            onPress={() => {
+              if (!splitPrompt) return;
+              const { amount, note } = splitPrompt;
+              setSplitPrompt(null);
+              router.push({ pathname: "/split/new", params: { amount: String(amount), note } });
+            }}
+            style={styles.save}
+          >
+            <Text style={styles.saveText}>Split it</Text>
+          </Pressable>
+          <Pressable testID="split-prompt-dismiss" onPress={() => setSplitPrompt(null)} style={styles.remove}>
+            <Text style={authStyles.linkText}>Not now</Text>
+          </Pressable>
+        </Pressable>
+      </Pressable>
+    </Modal>
     <Calculator visible={calcOpen} initial={form.amount} onClose={() => setCalcOpen(false)} onApply={(_v, display) => { setForm((f) => ({ ...f, amount: display })); setCalcOpen(false); }} />
     {datePickerOpen ? (
       <View style={styles.pickerOverlay} testID="date-picker-overlay">
