@@ -10,7 +10,7 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.emergent.mobileupgrade.d2j4fl",
+      "bundleIdentifier": "com.akkash.spendpulse",
       "infoPlist": {
         "NSContactsUsageDescription": "Import friends to add them to your split expenses"
       }
@@ -21,7 +21,7 @@
         "backgroundColor": "#000000"
       },
       "edgeToEdgeEnabled": true,
-      "package": "com.emergent.mobileupgrade.d2j4fl",
+      "package": "com.akkash.spendpulse",
       "permissions": ["android.permission.READ_CONTACTS"]
     },
     "web": {
