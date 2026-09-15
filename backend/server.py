@@ -9,7 +9,6 @@ import bcrypt
 import jwt
 import os
 import re
-import hashlib
 import logging
 from pathlib import Path
 from pydantic import BaseModel, Field, field_validator
@@ -33,6 +32,21 @@ bearer = HTTPBearer(auto_error=False)
 # Accounts always promoted to admin.
 ADMIN_USERNAMES = {u.strip().lower() for u in os.environ.get("ADMIN_USERNAMES", "").split(",") if u.strip()}
 ADMIN_PHONES = {p.strip() for p in os.environ.get("ADMIN_PHONES", "").split(",") if p.strip()}
+
+# Explicit allow-list instead of "*". The app authenticates with a Bearer token
+# (not cookies), so allow_credentials=False below — that combination is also
+# the only one browsers actually honor for "*" + credentialed requests, so the
+# old "*" + allow_credentials=True pairing wasn't even doing what it looked like.
+# Override with a comma-separated list in the ALLOWED_ORIGINS env var for other
+# deployments (e.g. a local Expo dev server origin).
+ALLOWED_ORIGINS = [
+    o.strip()
+    for o in os.environ.get(
+        "ALLOWED_ORIGINS",
+        "https://spendpulse-tracker.vercel.app,http://localhost:8081,http://localhost:19006",
+    ).split(",")
+    if o.strip()
+]
 
 USERNAME_PATTERN = re.compile(r"^[a-zA-Z0-9_.]{3,30}$")
 PIN_PATTERN = re.compile(r"^\d{6}$")
@@ -65,10 +79,19 @@ def validate_pin(value: str) -> str:
     return cleaned
 
 
-def pin_digest(pin: str) -> str:
-    # Deterministic hash used only to check PIN uniqueness across users.
-    # (bcrypt hashes are salted, so they can't be compared directly for this.)
-    return hashlib.sha256(pin.encode()).hexdigest()
+# NOTE: we deliberately do NOT enforce PIN uniqueness across users anymore.
+# The old approach stored sha256(pin) ("pin_digest") to check for collisions.
+# Because a 6-digit PIN only has 1,000,000 possible values, an unsalted SHA-256
+# digest over that space can be reversed in well under a second with a
+# precomputed table — so storing it effectively stored the PIN in the clear.
+# Usernames are already globally unique and are what authentication keys off
+# of, so two different users sharing the same PIN is not a security problem;
+# it just no longer needs to be prevented.
+
+
+LOGIN_MAX_ATTEMPTS = 5
+LOGIN_LOCKOUT_MINUTES = 15
+LOGIN_ATTEMPT_WINDOW_MINUTES = 15
 
 
 # Create the main app without a prefix
@@ -154,6 +177,15 @@ class AdminUserSummary(BaseModel):
 
 class AdminSetDisabledInput(BaseModel):
     disabled: bool
+
+
+class AdminResetPinInput(BaseModel):
+    new_pin: str = Field(min_length=6, max_length=6)
+
+    @field_validator("new_pin")
+    @classmethod
+    def validate_pin_field(cls, value: str) -> str:
+        return validate_pin(value)
 
 
 class AdminTransactionUpdate(BaseModel):
@@ -424,8 +456,45 @@ def create_token(user_id: str) -> str:
     )
 
 
-def _is_admin_identity(doc: dict[str, Any]) -> bool:
-    return (doc.get("username") in ADMIN_USERNAMES) or (doc.get("phone") in ADMIN_PHONES)
+def _admin_claim_key(username: Optional[str], phone: Optional[str]) -> Optional[str]:
+    # ADMIN_USERNAMES / ADMIN_PHONES just say which identity is ALLOWED to hold
+    # the admin slot; db.admin_claims records who actually holds it. Without the
+    # claims table, deleting an admin account frees their username, and the next
+    # person to sign up with that exact username would silently inherit admin —
+    # this closes that hole by making the claim persist independently of the
+    # user record.
+    if username and username in ADMIN_USERNAMES:
+        return f"username:{username}"
+    if phone and phone in ADMIN_PHONES:
+        return f"phone:{phone}"
+    return None
+
+
+async def _is_admin_identity(doc: dict[str, Any]) -> bool:
+    key = _admin_claim_key(doc.get("username"), doc.get("phone"))
+    if key is None:
+        return False
+    claim = await db.admin_claims.find_one({"key": key}, {"_id": 0})
+    return bool(claim) and claim.get("owner_user_id") == doc.get("id")
+
+
+async def _claim_admin_role(user_id: str, username: Optional[str], phone: Optional[str]) -> str:
+    """Grant admin at signup only if nobody has ever claimed this reserved
+    username/phone before. First claim wins, permanently — even if that user
+    is later deleted, the slot stays claimed and won't silently pass to
+    whoever re-registers the freed username next."""
+    key = _admin_claim_key(username, phone)
+    if key is None:
+        return "user"
+    result = await db.admin_claims.update_one(
+        {"key": key},
+        {"$setOnInsert": {"key": key, "owner_user_id": user_id, "claimed_at": datetime.now(timezone.utc).isoformat()}},
+        upsert=True,
+    )
+    if result.upserted_id is not None:
+        return "admin"
+    existing = await db.admin_claims.find_one({"key": key}, {"_id": 0})
+    return "admin" if existing and existing.get("owner_user_id") == user_id else "user"
 
 
 def _to_user_response(doc: dict[str, Any]) -> UserResponse:
@@ -437,8 +506,42 @@ def _to_user_response(doc: dict[str, Any]) -> UserResponse:
     )
 
 
+async def _login_lockout_remaining_seconds(username: str) -> int:
+    doc = await db.login_attempts.find_one({"username": username}, {"_id": 0})
+    if not doc or not doc.get("locked_until"):
+        return 0
+    locked_until = datetime.fromisoformat(doc["locked_until"])
+    remaining = (locked_until - datetime.now(timezone.utc)).total_seconds()
+    return max(0, int(remaining))
+
+
+async def _record_login_failure(username: str) -> None:
+    now = datetime.now(timezone.utc)
+    window_start = now - timedelta(minutes=LOGIN_ATTEMPT_WINDOW_MINUTES)
+    doc = await db.login_attempts.find_one({"username": username}, {"_id": 0})
+    if doc and doc.get("first_attempt_at"):
+        first_attempt = datetime.fromisoformat(doc["first_attempt_at"])
+        if first_attempt < window_start:
+            doc = None  # previous failures aged out of the window — start counting fresh
+    count = (doc.get("count", 0) if doc else 0) + 1
+    update: dict[str, Any] = {
+        "username": username,
+        "count": count,
+        "first_attempt_at": doc.get("first_attempt_at") if doc else now.isoformat(),
+        "last_attempt_at": now.isoformat(),
+    }
+    if count >= LOGIN_MAX_ATTEMPTS:
+        update["locked_until"] = (now + timedelta(minutes=LOGIN_LOCKOUT_MINUTES)).isoformat()
+        update["count"] = 0
+    await db.login_attempts.update_one({"username": username}, {"$set": update}, upsert=True)
+
+
+async def _clear_login_failures(username: str) -> None:
+    await db.login_attempts.delete_one({"username": username})
+
+
 async def _ensure_role(doc: dict[str, Any]) -> dict[str, Any]:
-    desired_role = "admin" if _is_admin_identity(doc) else (doc.get("role") or "user")
+    desired_role = "admin" if await _is_admin_identity(doc) else (doc.get("role") or "user")
     updates: dict[str, Any] = {}
     if doc.get("role") != desired_role and desired_role == "admin":
         updates["role"] = desired_role
@@ -489,16 +592,13 @@ async def root():
 async def signup(input: SignupInput):
     if await db.users.find_one({"username": input.username}, {"_id": 0}):
         raise HTTPException(status_code=409, detail="Username already taken. Please choose another username.")
-    digest = pin_digest(input.pin)
-    if await db.users.find_one({"pin_digest": digest}, {"_id": 0}):
-        raise HTTPException(status_code=409, detail="This PIN is already in use. Please choose a different PIN.")
-    role = "admin" if (input.username in ADMIN_USERNAMES or input.phone in ADMIN_PHONES) else "user"
+    user_id = str(uuid.uuid4())
+    role = await _claim_admin_role(user_id, input.username, input.phone)
     user = {
-        "id": str(uuid.uuid4()),
+        "id": user_id,
         "username": input.username,
         "phone": input.phone,
         "pin_hash": bcrypt.hashpw(input.pin.encode(), bcrypt.gensalt()).decode(),
-        "pin_digest": digest,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "role": role,
         "disabled": False,
@@ -509,10 +609,18 @@ async def signup(input: SignupInput):
 
 @api_router.post("/auth/login", response_model=TokenResponse)
 async def login(input: LoginInput):
+    locked_seconds = await _login_lockout_remaining_seconds(input.username)
+    if locked_seconds > 0:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Too many failed attempts. Try again in {locked_seconds // 60 + 1} minute(s).",
+        )
     user = await db.users.find_one({"username": input.username}, {"_id": 0})
     valid = user and bcrypt.checkpw(input.pin.encode(), user["pin_hash"].encode())
     if not valid:
+        await _record_login_failure(input.username)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect username or PIN")
+    await _clear_login_failures(input.username)
     await _ensure_role(user)
     if user.get("disabled"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This account has been disabled")
@@ -542,11 +650,8 @@ async def change_pin(input: ChangePinInput, user: dict[str, Any] = Depends(curre
     stored = await db.users.find_one({"id": user["id"]}, {"_id": 0, "pin_hash": 1})
     if not stored or not bcrypt.checkpw(input.current_pin.encode(), stored["pin_hash"].encode()):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Current PIN is incorrect")
-    new_digest = pin_digest(input.new_pin)
-    if await db.users.find_one({"pin_digest": new_digest, "id": {"$ne": user["id"]}}, {"_id": 0}):
-        raise HTTPException(status_code=409, detail="This PIN is already in use. Please choose a different PIN.")
     new_hash = bcrypt.hashpw(input.new_pin.encode(), bcrypt.gensalt()).decode()
-    await db.users.update_one({"id": user["id"]}, {"$set": {"pin_hash": new_hash, "pin_digest": new_digest}})
+    await db.users.update_one({"id": user["id"]}, {"$set": {"pin_hash": new_hash}})
     return {"ok": True}
 
 
@@ -728,6 +833,20 @@ async def admin_set_disabled(user_id: str, input: AdminSetDisabledInput, admin: 
         raise HTTPException(status_code=400, detail="You can't disable your own account")
     await db.users.update_one({"id": user_id}, {"$set": {"disabled": input.disabled}})
     return {"ok": True, "disabled": input.disabled}
+
+
+@api_router.post("/admin/users/{user_id}/reset-pin")
+async def admin_reset_pin(user_id: str, input: AdminResetPinInput, admin: dict[str, Any] = Depends(current_admin)):
+    # There is currently no self-service "forgot PIN" flow (the earlier email-based
+    # reset was removed), so a locked-out user's only recovery path is an admin
+    # resetting their PIN here. Also clears any login lockout on that username.
+    target = await db.users.find_one({"id": user_id}, {"_id": 0})
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    new_hash = bcrypt.hashpw(input.new_pin.encode(), bcrypt.gensalt()).decode()
+    await db.users.update_one({"id": user_id}, {"$set": {"pin_hash": new_hash}})
+    await _clear_login_failures(target.get("username") or "")
+    return {"ok": True}
 
 
 @api_router.delete("/admin/users/{user_id}")
@@ -997,8 +1116,8 @@ app.include_router(api_router)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_credentials=True,
-    allow_origins=["*"],
+    allow_credentials=False,
+    allow_origins=ALLOWED_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -1013,9 +1132,47 @@ logging.basicConfig(
 async def _startup_indexes():
     try:
         await db.users.create_index("username", unique=True, partialFilterExpression={"username": {"$exists": True}})
-        await db.users.create_index("pin_digest", unique=True, partialFilterExpression={"pin_digest": {"$exists": True}})
+        await db.login_attempts.create_index("username", unique=True)
+        await db.admin_claims.create_index("key", unique=True)
+        # TTL index: Mongo auto-deletes a revoked_tokens doc once its expires_at
+        # (the JWT's own expiry) is in the past, so the denylist self-cleans
+        # instead of growing forever.
+        await db.revoked_tokens.create_index("expires_at", expireAfterSeconds=0)
     except Exception as exc:  # pragma: no cover
         logger.warning("Index creation skipped: %s", exc)
+
+
+@app.on_event("startup")
+async def _backfill_admin_claims():
+    # One-time migration for deployments upgrading from the old env-var-only
+    # admin check: register a claim for whichever existing user already holds
+    # each reserved admin username/phone, so they keep admin after this change
+    # (new signups going forward go through _claim_admin_role instead).
+    try:
+        for username in ADMIN_USERNAMES:
+            key = f"username:{username}"
+            if await db.admin_claims.find_one({"key": key}, {"_id": 0}):
+                continue
+            existing_user = await db.users.find_one({"username": username}, {"_id": 0, "id": 1})
+            if existing_user:
+                await db.admin_claims.update_one(
+                    {"key": key},
+                    {"$setOnInsert": {"key": key, "owner_user_id": existing_user["id"], "claimed_at": datetime.now(timezone.utc).isoformat()}},
+                    upsert=True,
+                )
+        for phone in ADMIN_PHONES:
+            key = f"phone:{phone}"
+            if await db.admin_claims.find_one({"key": key}, {"_id": 0}):
+                continue
+            existing_user = await db.users.find_one({"phone": phone}, {"_id": 0, "id": 1})
+            if existing_user:
+                await db.admin_claims.update_one(
+                    {"key": key},
+                    {"$setOnInsert": {"key": key, "owner_user_id": existing_user["id"], "claimed_at": datetime.now(timezone.utc).isoformat()}},
+                    upsert=True,
+                )
+    except Exception as exc:  # pragma: no cover
+        logger.warning("Admin claim backfill skipped: %s", exc)
 
 
 @app.on_event("shutdown")
