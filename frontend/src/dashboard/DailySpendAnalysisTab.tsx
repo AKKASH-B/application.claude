@@ -3,16 +3,20 @@ import { View, Text, Pressable, ScrollView, StyleSheet } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import type { Transaction } from './types';
 import { COLORS, money, monthLabel } from './constants';
-import { getDailySpends } from './DailySpendAnalysis';
-import { DailySpendDetailModal, type DailySpend } from './DailySpendAnalysis';
+import { getDailySpends, getWeeklySpends } from './DailySpendAnalysis';
+import { DailySpendDetailModal, type DailySpend, type WeeklySpend } from './DailySpendAnalysis';
 
 interface DailySpendTabProps {
   transactions: Transaction[];
 }
 
+const WEEKDAY_SHORT = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
 export const DailySpendAnalysisTab: React.FC<DailySpendTabProps> = ({ transactions }) => {
   const [selectedDailySpend, setSelectedDailySpend] = useState<DailySpend | null>(null);
+  const [mode, setMode] = useState<'daily' | 'weekly'>('daily');
   const dailySpends = useMemo(() => getDailySpends(transactions), [transactions]);
+  const weeklySpends = useMemo(() => getWeeklySpends(transactions), [transactions]);
 
   if (dailySpends.length === 0) {
     return (
@@ -29,11 +33,82 @@ export const DailySpendAnalysisTab: React.FC<DailySpendTabProps> = ({ transactio
   return (
     <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
       <View style={styles.header}>
-        <Text style={styles.title}>Daily Spending Analysis</Text>
-        <Text style={styles.subtitle}>View your spending by day</Text>
+        <Text style={styles.title}>{mode === 'daily' ? 'Daily Spending Analysis' : 'Weekly Spending Analysis'}</Text>
+        <Text style={styles.subtitle}>{mode === 'daily' ? 'View your spending by day' : 'Monday to Sunday breakdown'}</Text>
       </View>
 
-      {dailySpends.map((dailySpend) => (
+      <View style={styles.modeToggle}>
+        <Pressable onPress={() => setMode('daily')} style={[styles.modeBtn, mode === 'daily' && styles.modeBtnActive]}>
+          <Text style={[styles.modeBtnText, mode === 'daily' && styles.modeBtnTextActive]}>Daily</Text>
+        </Pressable>
+        <Pressable onPress={() => setMode('weekly')} style={[styles.modeBtn, mode === 'weekly' && styles.modeBtnActive]}>
+          <Text style={[styles.modeBtnText, mode === 'weekly' && styles.modeBtnTextActive]}>Weekly</Text>
+        </Pressable>
+      </View>
+
+      {mode === 'weekly' ? (
+        weeklySpends.map((week) => (
+          <View key={week.weekStart} style={styles.weekCard}>
+            <View style={styles.weekCardHeader}>
+              <View style={styles.dayLabelSection}>
+                <Text style={styles.dayLabel}>{week.label}</Text>
+                <Text style={styles.dayDate}>{week.weekStart} - {week.weekEnd}</Text>
+              </View>
+              <View style={styles.dayAmountSection}>
+                <Text style={styles.dayAmount}>{money(week.totalSpent)}</Text>
+                <Text style={styles.dayAmountLabel}>spent</Text>
+              </View>
+            </View>
+
+            {week.totalIncome > 0 && (
+              <View style={styles.incomeRow}>
+                <Feather name="arrow-down-left" size={14} color={COLORS.green} />
+                <Text style={styles.incomeText}>{money(week.totalIncome)} received</Text>
+              </View>
+            )}
+
+            <View style={styles.weekDaysRow}>
+              {Array.from({ length: 7 }).map((_, i) => {
+                const dayData = week.days.find((d) => {
+                  const dow = new Date(d.date + 'T12:00:00').getDay();
+                  const mondayIndex = dow === 0 ? 6 : dow - 1;
+                  return mondayIndex === i;
+                });
+                const hasData = !!dayData;
+                return (
+                  <Pressable
+                    key={i}
+                    disabled={!hasData}
+                    onPress={() => dayData && setSelectedDailySpend(dayData)}
+                    style={styles.weekDayCol}
+                  >
+                    <Text style={styles.weekDayLabel}>{WEEKDAY_SHORT[i]}</Text>
+                    <View style={[styles.weekDayDot, hasData && styles.weekDayDotActive]} />
+                    <Text style={[styles.weekDayAmount, !hasData && styles.weekDayAmountEmpty]} numberOfLines={1}>
+                      {hasData ? money(dayData.totalSpent) : '-'}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            {week.categories.length > 0 && (
+              <View style={styles.categoriesSection}>
+                <Text style={styles.categoriesTitle}>Top Spending</Text>
+                {week.categories.slice(0, 4).map((cat) => (
+                  <View key={cat.category} style={styles.categoryBar}>
+                    <View style={styles.categoryInfo}>
+                      <Text style={styles.categoryName}>{cat.category}</Text>
+                      <Text style={styles.categoryTx}>{cat.count} transaction{cat.count !== 1 ? 's' : ''}</Text>
+                    </View>
+                    <Text style={styles.categoryAmount}>{money(cat.amount)}</Text>
+                  </View>
+                ))}
+              </View>
+            )}
+          </View>
+        ))
+      ) : dailySpends.map((dailySpend) => (
         <Pressable
           key={dailySpend.date}
           onPress={() => setSelectedDailySpend(dailySpend)}
@@ -107,6 +182,87 @@ const styles = StyleSheet.create({
     paddingBottom: 16,
     borderBottomWidth: 1,
     borderBottomColor: '#f0f0f0',
+  },
+  modeToggle: {
+    flexDirection: 'row',
+    backgroundColor: '#f3f4f6',
+    borderRadius: 12,
+    padding: 4,
+    marginHorizontal: 16,
+    marginTop: 14,
+  },
+  modeBtn: {
+    flex: 1,
+    paddingVertical: 9,
+    borderRadius: 9,
+    alignItems: 'center',
+  },
+  modeBtnActive: {
+    backgroundColor: '#fff',
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  modeBtnText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: COLORS.gray,
+  },
+  modeBtnTextActive: {
+    color: COLORS.green,
+  },
+  weekCard: {
+    marginHorizontal: 12,
+    marginVertical: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    backgroundColor: '#f9fafb',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+  weekCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  weekDaysRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    backgroundColor: '#fff',
+    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 4,
+    marginBottom: 12,
+  },
+  weekDayCol: {
+    flex: 1,
+    alignItems: 'center',
+    gap: 4,
+  },
+  weekDayLabel: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: COLORS.gray,
+  },
+  weekDayDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#e5e7eb',
+  },
+  weekDayDotActive: {
+    backgroundColor: COLORS.green,
+  },
+  weekDayAmount: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: COLORS.dark,
+  },
+  weekDayAmountEmpty: {
+    color: '#d1d5db',
   },
   title: {
     fontSize: 22,

@@ -20,24 +20,32 @@ interface DailySpendAnalysisProps {
   onOpenModal?: (dailySpend: DailySpend) => void;
 }
 
+// Local (device timezone) YYYY-MM-DD, matching todayIso() in src/components/Calendar.tsx.
+// Using UTC here would make "Today" lag behind the real local date for several hours each day.
+const localIso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+// Parse a YYYY-MM-DD string as a local date (not UTC), so weekday/month labels never shift a day.
+const parseLocalDate = (dateStr: string): Date => {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  return new Date(y, (m || 1) - 1, d || 1);
+};
+
 export const getDailySpends = (transactions: Transaction[]): DailySpend[] => {
   const today = new Date();
   const yesterday = new Date(today);
   yesterday.setDate(today.getDate() - 1);
 
-  const todayStr = today.toISOString().split('T')[0];
-  const yesterdayStr = yesterday.toISOString().split('T')[0];
+  const todayStr = localIso(today);
+  const yesterdayStr = localIso(yesterday);
 
   const getDayLabel = (dateStr: string): string => {
     if (dateStr === todayStr) return 'Today';
     if (dateStr === yesterdayStr) return 'Yesterday';
-    const date = new Date(dateStr + 'T00:00:00Z');
-    return date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+    return parseLocalDate(dateStr).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
   };
 
   const getDisplayDate = (dateStr: string): string => {
-    const date = new Date(dateStr + 'T00:00:00Z');
-    return date.toLocaleDateString('en-US', { year: '2-digit', month: '2-digit', day: '2-digit' });
+    return parseLocalDate(dateStr).toLocaleDateString('en-US', { year: '2-digit', month: '2-digit', day: '2-digit' });
   };
 
   const processDay = (dateStr: string, dayLabel: string): DailySpend | null => {
@@ -93,6 +101,74 @@ export const getDailySpends = (transactions: Transaction[]): DailySpend[] => {
   }
 
   return dailySpends;
+};
+
+export interface WeeklySpend {
+  weekStart: string; // Monday, YYYY-MM-DD
+  weekEnd: string; // Sunday, YYYY-MM-DD
+  label: string; // "This Week" | "Last Week" | "Mar 3 - Mar 9"
+  totalSpent: number;
+  totalIncome: number;
+  categories: Array<{ category: string; amount: number; count: number }>;
+  days: DailySpend[]; // Monday..Sunday, only days that exist are included but ordered Mon-Sun
+}
+
+// Monday of the week containing the given local date
+const mondayOf = (d: Date): Date => {
+  const day = d.getDay(); // 0 = Sunday, 1 = Monday, ... 6 = Saturday
+  const diffToMonday = day === 0 ? -6 : 1 - day;
+  const monday = new Date(d);
+  monday.setDate(d.getDate() + diffToMonday);
+  monday.setHours(0, 0, 0, 0);
+  return monday;
+};
+
+export const getWeeklySpends = (transactions: Transaction[]): WeeklySpend[] => {
+  const dailySpends = getDailySpends(transactions);
+  if (dailySpends.length === 0) return [];
+
+  const byDate = new Map(dailySpends.map((d) => [d.date, d]));
+  const thisWeekStart = localIso(mondayOf(new Date()));
+  const lastWeekStart = localIso(mondayOf(new Date(new Date().setDate(new Date().getDate() - 7))));
+
+  // Group all known dates (from transactions) by the Monday that starts their week
+  const weekStarts = Array.from(new Set(dailySpends.map((d) => localIso(mondayOf(parseLocalDate(d.date))))))
+    .sort((a, b) => (a < b ? 1 : a > b ? -1 : 0));
+
+  const weeks: WeeklySpend[] = weekStarts.map((weekStart) => {
+    const mondayDate = parseLocalDate(weekStart);
+    const days: DailySpend[] = [];
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(mondayDate);
+      d.setDate(mondayDate.getDate() + i);
+      const iso = localIso(d);
+      const existing = byDate.get(iso);
+      if (existing) days.push(existing);
+    }
+
+    const sundayDate = new Date(mondayDate);
+    sundayDate.setDate(mondayDate.getDate() + 6);
+    const weekEnd = localIso(sundayDate);
+
+    const totalSpent = days.reduce((s, d) => s + d.totalSpent, 0);
+    const totalIncome = days.reduce((s, d) => s + d.totalIncome, 0);
+
+    const categoryMap: Record<string, { amount: number; count: number }> = {};
+    days.forEach((d) => d.categories.forEach((c) => {
+      if (!categoryMap[c.category]) categoryMap[c.category] = { amount: 0, count: 0 };
+      categoryMap[c.category].amount += c.amount;
+      categoryMap[c.category].count += c.count;
+    }));
+    const categories = Object.entries(categoryMap)
+      .map(([category, { amount, count }]) => ({ category, amount, count }))
+      .sort((a, b) => b.amount - a.amount);
+
+    const label = weekStart === thisWeekStart ? 'This Week' : weekStart === lastWeekStart ? 'Last Week' : `${mondayDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${sundayDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
+
+    return { weekStart, weekEnd, label, totalSpent, totalIncome, categories, days };
+  });
+
+  return weeks;
 };
 
 export const DailySpendAnalysis: React.FC<DailySpendAnalysisProps> = ({

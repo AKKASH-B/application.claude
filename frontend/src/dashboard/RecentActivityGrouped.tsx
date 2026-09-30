@@ -16,14 +16,19 @@ interface GroupedTx {
   transactions: Transaction[];
 }
 
+// Local (device timezone) YYYY-MM-DD, matching todayIso() in src/components/Calendar.tsx.
+// Using UTC here would make "Today"/"Yesterday" lag behind the real local date for several hours each day.
+const localIso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
 const formatDate = (dateStr: string): string => {
-  const date = new Date(dateStr + 'T00:00:00Z');
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const date = new Date(y, (m || 1) - 1, d || 1);
   const today = new Date();
   const yesterday = new Date(today);
   yesterday.setDate(today.getDate() - 1);
 
-  const todayStr = today.toISOString().split('T')[0];
-  const yesterdayStr = yesterday.toISOString().split('T')[0];
+  const todayStr = localIso(today);
+  const yesterdayStr = localIso(yesterday);
 
   if (dateStr === todayStr) return 'Today';
   if (dateStr === yesterdayStr) return 'Yesterday';
