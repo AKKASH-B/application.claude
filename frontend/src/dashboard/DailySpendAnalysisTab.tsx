@@ -51,16 +51,12 @@ export const DailySpendAnalysisTab: React.FC<DailySpendTabProps> = ({ transactio
             <Feather name="chevron-right" size={24} color={COLORS.gray} />
           </View>
 
-          <View style={styles.incomeSpendRow}>
-            <View style={styles.incomeSpendItem}>
+          {dailySpend.totalIncome > 0 && (
+            <View style={styles.incomeRow}>
               <Feather name="arrow-down-left" size={14} color={COLORS.green} />
               <Text style={styles.incomeText}>{money(dailySpend.totalIncome)} received</Text>
             </View>
-            <View style={[styles.incomeSpendItem, styles.spendItem]}>
-              <Feather name="arrow-up-right" size={14} color={COLORS.red} />
-              <Text style={styles.spentText}>{money(dailySpend.totalSpent)} spent</Text>
-            </View>
-          </View>
+          )}
 
           <View style={styles.statsRow}>
             <View style={styles.statItem}>
@@ -188,36 +184,21 @@ const styles = StyleSheet.create({
     color: COLORS.gray,
     marginTop: 2,
   },
-  incomeSpendRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: 10,
-  },
-  incomeSpendItem: {
-    flex: 1,
+  incomeRow: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#ecfdf5',
     paddingHorizontal: 10,
     paddingVertical: 7,
     borderRadius: 8,
+    marginBottom: 10,
     borderLeftWidth: 3,
     borderLeftColor: COLORS.green,
-  },
-  spendItem: {
-    backgroundColor: '#fef2f2',
-    borderLeftColor: COLORS.red,
   },
   incomeText: {
     fontSize: 12,
     fontWeight: '500',
     color: COLORS.green,
-    marginLeft: 8,
-  },
-  spentText: {
-    fontSize: 12,
-    fontWeight: '500',
-    color: COLORS.red,
     marginLeft: 8,
   },
   statsRow: {

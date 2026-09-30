@@ -80,13 +80,17 @@ export const getDailySpends = (transactions: Transaction[]): DailySpend[] => {
     };
   };
 
+  // Collect every distinct date that has at least one transaction, newest first
+  const uniqueDates = Array.from(new Set(transactions.map((t) => t.date.slice(0, 10)))).sort(
+    (a, b) => (a < b ? 1 : a > b ? -1 : 0)
+  );
+
   const dailySpends: DailySpend[] = [];
-
-  const today_spend = processDay(todayStr, 'Today');
-  if (today_spend) dailySpends.push(today_spend);
-
-  const yesterday_spend = processDay(yesterdayStr, 'Yesterday');
-  if (yesterday_spend) dailySpends.push(yesterday_spend);
+  for (const dateStr of uniqueDates) {
+    const label = getDayLabel(dateStr);
+    const spend = processDay(dateStr, label);
+    if (spend) dailySpends.push(spend);
+  }
 
   return dailySpends;
 };
