@@ -18,6 +18,9 @@ import { AuthScreen } from "@/src/dashboard/AuthScreen";
 import { BudgetSheet, CelebrationOverlay, ConfirmDeleteSheet, SavingsGoalSheet, TransactionActionsSheet } from "@/src/dashboard/TransactionSheets";
 import { ChangePasswordSheet, SettingsSheet } from "@/src/dashboard/SettingsSheet";
 import { AdminSheet } from "@/src/dashboard/AdminSheet";
+import { DailySpendAnalysisTab } from "@/src/dashboard/DailySpendAnalysisTab";
+import { RecentActivityGrouped } from "@/src/dashboard/RecentActivityGrouped";
+import { NotesTab } from "@/src/dashboard/NotesTab";
 
 export default function Index() {
   const [user, setUser] = useState<User | null>(null);
@@ -65,7 +68,7 @@ function Dashboard({ user, onSignedOut }: { user: User; onSignedOut: () => void 
       setBudgets(bd);
       setSavingsGoals(goals);
     } catch {
-      Alert.alert("Couldn’t load data", "Check your connection and try again.");
+      Alert.alert("Couldn't load data", "Check your connection and try again.");
     } finally {
       setLoading(false);
     }
@@ -124,7 +127,7 @@ function Dashboard({ user, onSignedOut }: { user: User; onSignedOut: () => void 
         setMonth(created.date.slice(0, 7));
         closeEditor();
       }
-    } catch { Alert.alert("Couldn’t save", "Please try again."); }
+    } catch { Alert.alert("Couldn't save", "Please try again."); }
   };
   const deleteTransaction = async (t: Transaction) => {
     try {
@@ -132,7 +135,7 @@ function Dashboard({ user, onSignedOut }: { user: User; onSignedOut: () => void 
       setTransactions((x) => x.filter((r) => r.id !== t.id));
       setActionsFor(null);
       setConfirmDelete(null);
-    } catch { Alert.alert("Couldn’t delete", "Please try again."); }
+    } catch { Alert.alert("Couldn't delete", "Please try again."); }
   };
   const askDelete = (t: Transaction) => {
     setActionsFor(null);
@@ -143,14 +146,14 @@ function Dashboard({ user, onSignedOut }: { user: User; onSignedOut: () => void 
       const saved = await authorizedRequest<Budget>("/budgets", { method: "PUT", body: JSON.stringify({ category, monthly_limit: limit }) });
       setBudgets((prev) => [...prev.filter((b) => b.category !== category), saved]);
       setBudgetSheet(null);
-    } catch { Alert.alert("Couldn’t save budget", "Please try again."); }
+    } catch { Alert.alert("Couldn't save budget", "Please try again."); }
   };
   const removeBudget = async (category: string) => {
     try {
       await authorizedRequest(`/budgets/${encodeURIComponent(category)}`, { method: "DELETE" });
       setBudgets((prev) => prev.filter((b) => b.category !== category));
       setBudgetSheet(null);
-    } catch { Alert.alert("Couldn’t remove", "Please try again."); }
+    } catch { Alert.alert("Couldn't remove", "Please try again."); }
   };
   const saveGoal = async (data: { name: string; target: number; target_date: string | null }) => {
     try {
@@ -163,7 +166,7 @@ function Dashboard({ user, onSignedOut }: { user: User; onSignedOut: () => void 
       }
       setGoalSheetOpen(false);
       setEditingGoal(null);
-    } catch { Alert.alert("Couldn’t save goal", "Please try again."); }
+    } catch { Alert.alert("Couldn't save goal", "Please try again."); }
   };
   const removeGoal = async () => {
     if (!editingGoal) return;
@@ -173,7 +176,7 @@ function Dashboard({ user, onSignedOut }: { user: User; onSignedOut: () => void 
       setTransactions((prev) => prev.map((t) => (t.goal_id === editingGoal.id ? { ...t, goal_id: null } : t)));
       setGoalSheetOpen(false);
       setEditingGoal(null);
-    } catch { Alert.alert("Couldn’t remove goal", "Please try again."); }
+    } catch { Alert.alert("Couldn't remove goal", "Please try again."); }
   };
   const openNewGoal = () => { setEditingGoal(null); setGoalSheetOpen(true); };
   const openEditGoal = (g: SavingsGoal) => { setEditingGoal(g); setGoalSheetOpen(true); };
@@ -191,9 +194,9 @@ function Dashboard({ user, onSignedOut }: { user: User; onSignedOut: () => void 
     <View style={styles.top}><View style={{ flex: 1 }}><Text style={styles.eyebrow}>PERSONAL FINANCE</Text><Text style={styles.title}>Hi {user.username}</Text><View style={styles.profileMetaRow}><Text style={styles.sectionSub} numberOfLines={1}>{user.phone}</Text></View></View><View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}><Pressable testID="open-import" onPress={() => setImportOpen(true)} style={styles.importBtn}><Feather name="message-square" size={16} color={COLORS.green} /><Text style={styles.importBtnText}>SMS</Text></Pressable><Pressable testID="open-settings" onPress={() => setSettingsOpen(true)} style={styles.avatar}><Text style={styles.avatarText}>{user.username.slice(0, 2).toUpperCase()}</Text></Pressable></View></View>
     <View style={styles.hero}><View style={styles.heroTop}><Text style={styles.heroLabel}>TOTAL BALANCE</Text><Feather name="more-horizontal" size={20} color="#B5C8BE" /></View><Text testID="total-balance" style={[styles.balance, balance < 0 && styles.balanceNeg]}>{balance < 0 ? "-" : ""}{money(balance)}</Text><View style={styles.delta}><Feather name="trending-up" size={13} color="#D7E8DE" /><Text style={styles.deltaText}>On track this month</Text></View><View style={styles.heroBottom}><Text style={styles.heroSmall}>Updated just now</Text><Text style={styles.heroSmall}>{transactions.length} transactions</Text></View></View>
     {overBudget.length > 0 && <View testID="budget-alert-banner" style={styles.alertBanner}><Feather name="alert-triangle" size={16} color={COLORS.red} /><Text style={styles.alertText}>Over budget on {overBudget.map((x) => x.category).join(", ")}</Text></View>}
-    {balance < 0 && <View testID="low-balance-alert" style={styles.lowBalanceCard}><View style={styles.lowBalanceIcon}><Feather name="trending-down" size={18} color={COLORS.red} /></View><View style={{ flex: 1 }}><Text style={styles.lowBalanceTitle}>Balance is in the red</Text><Text style={styles.lowBalanceSub}>You’ve transferred {money(balance)} more than you’ve received. Ease up or add income to get back on track.</Text></View></View>}
-    <View style={styles.tabs}>{["Overview", "Analytics", "Categories", "Calendar"].map((x) => <Pressable testID={`tab-${x.toLowerCase()}`} key={x} onPress={() => setTab(x)} style={[styles.tab, tab === x && styles.tabActive]}><Text style={[styles.tabText, tab === x && styles.tabTextActive]} numberOfLines={1}>{x}</Text></Pressable>)}</View>
-    {loading ? <ActivityIndicator color={COLORS.green} style={styles.loader} /> : tab === "Calendar" ? <CalendarView transactions={transactions} onOpenTx={setActionsFor} onAdd={openAdd} /> : tab === "Categories" ? <CategoriesView data={byCategory} max={max} budgetMap={budgetMap} onEditBudget={setBudgetSheet} /> : tab === "Analytics" ? <Analytics spent={spent} income={income} data={byCategory} max={max} transactions={transactions} month={month} /> : <>
+    {balance < 0 && <View testID="low-balance-alert" style={styles.lowBalanceCard}><View style={styles.lowBalanceIcon}><Feather name="trending-down" size={18} color={COLORS.red} /></View><View style={{ flex: 1 }}><Text style={styles.lowBalanceTitle}>Balance is in the red</Text><Text style={styles.lowBalanceSub}>You've transferred {money(balance)} more than you've received. Ease up or add income to get back on track.</Text></View></View>}
+    <View style={styles.tabs}>{["Overview", "Daily Spend", "Analytics", "Categories", "Calendar", "Notes"].map((x) => <Pressable testID={`tab-${x.toLowerCase()}`} key={x} onPress={() => setTab(x)} style={[styles.tab, tab === x && styles.tabActive]}><Text style={[styles.tabText, tab === x && styles.tabTextActive]} numberOfLines={1}>{x}</Text></Pressable>)}</View>
+    {loading ? <ActivityIndicator color={COLORS.green} style={styles.loader} /> : tab === "Daily Spend" ? <DailySpendAnalysisTab transactions={transactions} /> : tab === "Notes" ? <NotesTab /> : tab === "Calendar" ? <CalendarView transactions={transactions} onOpenTx={setActionsFor} onAdd={openAdd} /> : tab === "Categories" ? <CategoriesView data={byCategory} max={max} budgetMap={budgetMap} onEditBudget={setBudgetSheet} /> : tab === "Analytics" ? <Analytics spent={spent} income={income} data={byCategory} max={max} transactions={transactions} month={month} /> : <>
       <View style={styles.monthPicker}>
         <Pressable testID="prev-month" onPress={() => setMonth((m) => shiftMonth(m, -1))} style={styles.monthNav}><Feather name="chevron-left" size={18} color={COLORS.ink} /></Pressable>
         <Text testID="month-label" style={styles.monthText}>{monthLabel(month)}</Text>
@@ -206,8 +209,8 @@ function Dashboard({ user, onSignedOut }: { user: User; onSignedOut: () => void 
         ? <Pressable testID="set-savings-goal" onPress={openNewGoal} style={styles.goalEmptyCard}><View style={styles.goalEmptyIcon}><Feather name="target" size={20} color={COLORS.gold} /></View><View style={{ flex: 1 }}><Text style={styles.cardTitleTight}>Create your first goal</Text><Text style={styles.goalEmptySub}>Name a target and watch your set-aside money fill the ring.</Text></View><Feather name="plus-circle" size={20} color={COLORS.gold} /></Pressable>
         : savingsGoals.map((g) => <GoalCard key={g.id} goal={g} saved={savedByGoal[g.id] || 0} onEdit={() => openEditGoal(g)} />)}
       <View style={styles.card}><Text style={styles.cardTitle}>Spending by category</Text>{byCategory.length === 0 ? <Empty onAdd={openAdd} /> : byCategory.slice(0, 5).map((x) => <Bar key={x.category} category={x.category} amount={x.amount} max={max} limit={budgetMap[x.category]} />)}</View>
-      <View style={styles.sectionHeader}><View><Text style={styles.sectionTitle}>Recent activity</Text><Text style={styles.sectionSub}>Long-press to edit or delete</Text></View>{current.length > 5 && <Pressable testID="see-all-transactions" onPress={() => setShowAllRecent((v) => !v)}><Text style={styles.seeAll}>{showAllRecent ? "Show less" : "See all"}</Text></Pressable>}</View>
-      <View style={styles.card}>{(showAllRecent ? current : current.slice(0, 5)).map((t) => <TransactionRow key={t.id} t={t} onLongPress={() => setActionsFor(t)} />)}{current.length === 0 && <Text style={styles.emptyText}>No transactions recorded for {monthLabel(month)}.</Text>}</View>
+      <View style={styles.sectionHeader}><View><Text style={styles.sectionTitle}>Recent activity</Text><Text style={styles.sectionSub}>Long-press to edit or delete</Text></View></View>
+      <View style={styles.card}><RecentActivityGrouped transactions={showAllRecent ? current : current.slice(0, 15)} onLongPress={setActionsFor} />{current.length > 15 && <Pressable testID="see-all-transactions" onPress={() => setShowAllRecent((v) => !v)} style={styles.seeAllButton}><Text style={styles.seeAll}>{showAllRecent ? "Show less" : "See all"}</Text></Pressable>}</View>
     </>}
   </ScrollView><View style={styles.bottom}><Nav icon="grid" label="Overview" active={tab === "Overview"} onPress={() => setTab("Overview")} /><Nav icon="bar-chart-2" label="Analytics" active={tab === "Analytics"} onPress={() => setTab("Analytics")} /><Pressable testID="add-transaction-fab" style={styles.fab} onPress={openAdd}><Feather name="plus" size={24} color="#FFF" /></Pressable><Nav icon="users" label="Splits" active={false} onPress={() => router.push("/splits")} /><Nav icon="settings" label="Settings" active={false} onPress={() => setSettingsOpen(true)} /></View>
     <Modal visible={editorOpen} transparent animationType="slide" onRequestClose={closeEditor}><KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.modalShade}><View style={[styles.modal, { maxHeight: "92%" }]}><ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} contentContainerStyle={{ gap: 12, paddingBottom: 8 }}><View style={styles.modalHead}><Text style={styles.modalTitle}>{editing ? "Edit transaction" : "Add transaction"}</Text><Pressable testID="close-add-transaction" onPress={closeEditor}><Feather name="x" size={22} color={COLORS.muted} /></Pressable></View><View style={styles.typeRow}><Pressable testID="type-expense" onPress={() => chooseType("expense")} style={[styles.type, form.type === "expense" && styles.typeExpense]}><Text style={[styles.typeText, form.type === "expense" && { color: COLORS.red }]} numberOfLines={1}>Transferred</Text></Pressable><Pressable testID="type-income" onPress={() => chooseType("income")} style={[styles.type, form.type === "income" && styles.typeIncome]}><Text style={[styles.typeText, form.type === "income" && { color: COLORS.green }]} numberOfLines={1}>Received</Text></Pressable><Pressable testID="type-savings" onPress={() => chooseType("savings")} style={[styles.type, form.type === "savings" && styles.typeSavings]}><Text style={[styles.typeText, form.type === "savings" && { color: COLORS.gold }]} numberOfLines={1}>Savings</Text></Pressable></View><Text style={styles.inputLabel}>AMOUNT</Text><View style={styles.amountRow}><TextInput testID="transaction-amount" value={form.amount} onChangeText={(amount) => setForm({ ...form, amount })} onBlur={handleAmountBlur} keyboardType="decimal-pad" placeholder="₹ 0" placeholderTextColor="#A9AAA5" style={[styles.input, { flex: 1 }]} /><Pressable testID="open-calculator" onPress={() => setCalcOpen(true)} style={styles.calcBtn}><MaterialCommunityIcons name="calculator-variant-outline" size={22} color={COLORS.green} /></Pressable></View><Text style={styles.inputLabel}>DATE</Text><Pressable testID="open-date-picker" onPress={() => setDatePickerOpen(true)} style={styles.dateField}><Feather name="calendar" size={18} color={COLORS.green} /><Text style={styles.dateFieldText}>{prettyDate(form.date)}</Text><Feather name="chevron-down" size={18} color={COLORS.muted} /></Pressable>{form.type === "savings" && savingsGoals.length > 0 ? <><Text style={styles.inputLabel}>ADD TO GOAL</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>{savingsGoals.map((g) => <Pressable testID={`goal-chip-${g.id}`} key={g.id} onPress={() => setForm({ ...form, goalId: g.id, category: g.name })} style={[styles.chip, form.goalId === g.id && styles.chipActive]}><Text style={[styles.chipText, form.goalId === g.id && styles.chipTextActive]}>{g.name}</Text></Pressable>)}<Pressable testID="goal-chip-general" onPress={() => setForm({ ...form, goalId: null, category: "General" })} style={[styles.chip, form.goalId === null && styles.chipActive]}><Text style={[styles.chipText, form.goalId === null && styles.chipTextActive]}>General</Text></Pressable></ScrollView></> : <><Text style={styles.inputLabel}>CATEGORY</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>{categoriesFor(form.type).map((c) => <Pressable testID={`category-${c.toLowerCase().replace(/\s+/g, "-")}`} key={c} onPress={() => setForm({ ...form, category: c })} style={[styles.chip, form.category === c && styles.chipActive]}><Text style={[styles.chipText, form.category === c && styles.chipTextActive]}>{c}</Text></Pressable>)}</ScrollView></>}<Text style={styles.inputLabel}>NOTE</Text><TextInput value={form.note} onChangeText={(note) => setForm({ ...form, note })} placeholder="Optional note" placeholderTextColor="#A9AAA5" style={styles.input} /><Pressable testID="save-transaction" onPress={submitTransaction} style={styles.save}><Text style={styles.saveText}>{editing ? "Save changes" : "Save transaction"}</Text></Pressable></ScrollView></View>
