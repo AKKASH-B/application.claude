@@ -35,7 +35,7 @@ function Dashboard({ user, onSignedOut }: { user: User; onSignedOut: () => void 
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [budgets, setBudgets] = useState<Budget[]>([]);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState("Daily Spends");
+  const [tab, setTab] = useState("Overview");
   const [month, setMonth] = useState(nowMonth());
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
@@ -195,7 +195,8 @@ function Dashboard({ user, onSignedOut }: { user: User; onSignedOut: () => void 
     <View style={styles.hero}><View style={styles.heroTop}><Text style={styles.heroLabel}>TOTAL BALANCE</Text><Feather name="more-horizontal" size={20} color="#B5C8BE" /></View><Text testID="total-balance" style={[styles.balance, balance < 0 && styles.balanceNeg]}>{balance < 0 ? "-" : ""}{money(balance)}</Text><View style={styles.delta}><Feather name="trending-up" size={13} color="#D7E8DE" /><Text style={styles.deltaText}>On track this month</Text></View><View style={styles.heroBottom}><Text style={styles.heroSmall}>Updated just now</Text><Text style={styles.heroSmall}>{transactions.length} transactions</Text></View></View>
     {overBudget.length > 0 && <View testID="budget-alert-banner" style={styles.alertBanner}><Feather name="alert-triangle" size={16} color={COLORS.red} /><Text style={styles.alertText}>Over budget on {overBudget.map((x) => x.category).join(", ")}</Text></View>}
     {balance < 0 && <View testID="low-balance-alert" style={styles.lowBalanceCard}><View style={styles.lowBalanceIcon}><Feather name="trending-down" size={18} color={COLORS.red} /></View><View style={{ flex: 1 }}><Text style={styles.lowBalanceTitle}>Balance is in the red</Text><Text style={styles.lowBalanceSub}>You've transferred {money(balance)} more than you've received. Ease up or add income to get back on track.</Text></View></View>}
-    {loading ? <ActivityIndicator color={COLORS.green} style={styles.loader} /> : tab === "Daily Spends" ? <DailySpendAnalysisTab transactions={transactions} /> : tab === "Notes" ? <NotesTab /> : <>
+    <View style={styles.tabs}>{["Overview", "Analytics", "Categories", "Calendar"].map((x) => <Pressable testID={`tab-${x.toLowerCase()}`} key={x} onPress={() => setTab(x)} style={[styles.tab, tab === x && styles.tabActive]}><Text style={[styles.tabText, tab === x && styles.tabTextActive]} numberOfLines={1}>{x}</Text></Pressable>)}</View>
+    {loading ? <ActivityIndicator color={COLORS.green} style={styles.loader} /> : tab === "Daily Spends" ? <DailySpendAnalysisTab transactions={transactions} /> : tab === "Notes" ? <NotesTab /> : tab === "Calendar" ? <CalendarView transactions={transactions} onOpenTx={setActionsFor} onAdd={openAdd} /> : tab === "Categories" ? <CategoriesView data={byCategory} max={max} budgetMap={budgetMap} onEditBudget={setBudgetSheet} /> : tab === "Analytics" ? <Analytics spent={spent} income={income} data={byCategory} max={max} transactions={transactions} month={month} /> : <>
       <View style={styles.monthPicker}>
         <Pressable testID="prev-month" onPress={() => setMonth((m) => shiftMonth(m, -1))} style={styles.monthNav}><Feather name="chevron-left" size={18} color={COLORS.ink} /></Pressable>
         <Text testID="month-label" style={styles.monthText}>{monthLabel(month)}</Text>
