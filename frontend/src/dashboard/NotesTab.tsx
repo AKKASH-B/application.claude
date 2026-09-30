@@ -138,8 +138,13 @@ export const NotesTab: React.FC<NotesTabProps> = () => {
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.title}>Notes</Text>
-        <Text style={styles.subtitle}>Keep track of your thoughts</Text>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.title}>Notes</Text>
+          <Text style={styles.subtitle}>Keep track of your thoughts</Text>
+        </View>
+        <Pressable onPress={openNewNote} style={styles.createNoteBtn}>
+          <Text style={styles.createNoteBtnText}>Create Notes</Text>
+        </Pressable>
       </View>
 
       {notes.length === 0 ? (
@@ -148,8 +153,7 @@ export const NotesTab: React.FC<NotesTabProps> = () => {
           <Text style={styles.emptyTitle}>No Notes Yet</Text>
           <Text style={styles.emptyText}>Create your first note to get started</Text>
           <Pressable onPress={openNewNote} style={styles.emptyButton}>
-            <Feather name="plus" size={20} color="#fff" />
-            <Text style={styles.emptyButtonText}>Create Note</Text>
+            <Text style={styles.emptyButtonText}>Create Notes</Text>
           </Pressable>
         </View>
       ) : (
@@ -183,10 +187,6 @@ export const NotesTab: React.FC<NotesTabProps> = () => {
           <View style={styles.spacing} />
         </ScrollView>
       )}
-
-      <Pressable onPress={openNewNote} style={({ pressed }) => [styles.fab, pressed && styles.fabPressed]}>
-        <Feather name="plus" size={28} color="#fff" />
-      </Pressable>
 
       <Modal visible={modalVisible} transparent animationType="slide" onRequestClose={closeModal}>
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalContainer}>
@@ -243,6 +243,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
   },
   header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     paddingHorizontal: 16,
     paddingTop: 20,
     paddingBottom: 16,
@@ -258,6 +261,17 @@ const styles = StyleSheet.create({
   subtitle: {
     fontSize: 13,
     color: COLORS.gray,
+  },
+  createNoteBtn: {
+    backgroundColor: COLORS.green,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 10,
+  },
+  createNoteBtnText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '600',
   },
   emptyContainer: {
     flex: 1,
