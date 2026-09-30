@@ -142,12 +142,6 @@ export const DailySpendAnalysisTab: React.FC<DailySpendTabProps> = ({ transactio
               <Text style={styles.statLabel}>Transactions</Text>
               <Text style={styles.statValue}>{dailySpend.transactions.length}</Text>
             </View>
-            <View style={styles.statItem}>
-              <Text style={styles.statLabel}>Avg per tx</Text>
-              <Text style={styles.statValue}>
-                {money(dailySpend.totalSpent / Math.max(1, dailySpend.transactions.filter(t => t.type === 'expense').length))}
-              </Text>
-            </View>
           </View>
 
           <View style={styles.categoriesSection}>
