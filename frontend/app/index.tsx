@@ -94,6 +94,7 @@ function Dashboard({ user, onSignedOut }: { user: User; onSignedOut: () => void 
   const budgetMap = useMemo(() => Object.fromEntries(budgets.map((b) => [b.category, b.monthly_limit])) as Record<string, number>, [budgets]);
   const overBudget = useMemo(() => byCategory.filter((x) => budgetMap[x.category] && x.amount > budgetMap[x.category]), [byCategory, budgetMap]);
   const isCurrentMonth = month === nowMonth();
+  const isFutureMonth = month > nowMonth();
   const openAdd = () => { setEditing(null); setForm({ amount: "", category: TRANSFERRED_CATEGORIES[0], note: "", type: "expense", goalId: null, date: todayIso() }); setSplitAsked(false); setEditorOpen(true); };
   const openEdit = (t: Transaction) => { setEditing(t); setForm({ amount: String(t.amount), category: t.category, note: t.note || "", type: t.type, goalId: t.goal_id ?? null, date: t.date }); setActionsFor(null); setEditorOpen(true); };
   const closeEditor = () => { setEditorOpen(false); setEditing(null); };
@@ -204,9 +205,9 @@ function Dashboard({ user, onSignedOut }: { user: User; onSignedOut: () => void 
       <View style={styles.monthPicker}>
         <Pressable testID="prev-month" onPress={() => setMonth((m) => shiftMonth(m, -1))} style={styles.monthNav}><Feather name="chevron-left" size={18} color={COLORS.ink} /></Pressable>
         <Text testID="month-label" style={styles.monthText}>{monthLabel(month)}</Text>
-        <Pressable testID="next-month" disabled={isCurrentMonth} onPress={() => setMonth((m) => shiftMonth(m, 1))} style={[styles.monthNav, isCurrentMonth && { opacity: 0.3 }]}><Feather name="chevron-right" size={18} color={COLORS.ink} /></Pressable>
+        <Pressable testID="next-month" onPress={() => setMonth((m) => shiftMonth(m, 1))} style={styles.monthNav}><Feather name="chevron-right" size={18} color={COLORS.ink} /></Pressable>
       </View>
-      <View style={styles.sectionHeader}><View><Text style={styles.sectionTitle}>Monthly summary</Text><Text style={styles.sectionSub}>{isCurrentMonth ? "Live overview" : "Past month view"}</Text></View><Pressable testID="add-transaction-small" onPress={openAdd} style={styles.addSmall}><Feather name="plus" size={18} color="#FFF" /></Pressable></View>
+      <View style={styles.sectionHeader}><View><Text style={styles.sectionTitle}>Monthly summary</Text><Text style={styles.sectionSub}>{isCurrentMonth ? "Live overview" : isFutureMonth ? "Future month view" : "Past month view"}</Text></View><Pressable testID="add-transaction-small" onPress={openAdd} style={styles.addSmall}><Feather name="plus" size={18} color="#FFF" /></Pressable></View>
       <View style={styles.summaryGrid}><Metric label="Transferred" value={spent} tone={COLORS.red} icon="arrow-up-right" /><Metric label="Received" value={income} tone={COLORS.green} icon="arrow-down-left" /><Metric label="Savings" value={savings} tone={COLORS.gold} icon="pie-chart" /></View>
       <View style={styles.sectionHeader}><View><Text style={styles.sectionTitle}>Savings goals</Text><Text style={styles.sectionSub}>Track your targets & progress</Text></View><Pressable testID="add-goal-btn" onPress={openNewGoal} style={styles.addSmall}><Feather name="plus" size={18} color="#FFF" /></Pressable></View>
       {savingsGoals.length === 0
