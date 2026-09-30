@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import type { Transaction } from './types';
@@ -7,7 +7,10 @@ import { COLORS, money } from './constants';
 interface RecentActivityGroupedProps {
   transactions: Transaction[];
   onLongPress: (transaction: Transaction) => void;
-  maxItems?: number;
+  // Number of most-recent DATE groups to show by default (not a transaction count).
+  // Adding a newer-dated entry shifts the window forward and the oldest visible
+  // day drops off, exactly like it should — "See all" reveals every day again.
+  maxGroups?: number;
 }
 
 interface GroupedTx {
@@ -44,8 +47,9 @@ const formatDate = (dateStr: string): string => {
 export const RecentActivityGrouped: React.FC<RecentActivityGroupedProps> = ({
   transactions,
   onLongPress,
-  maxItems,
+  maxGroups = 3,
 }) => {
+  const [expanded, setExpanded] = useState(false);
   const grouped = useMemo(() => {
     const map: Record<string, Transaction[]> = {};
 
@@ -84,7 +88,8 @@ export const RecentActivityGrouped: React.FC<RecentActivityGroupedProps> = ({
     );
   }
 
-  const displayGroups = maxItems ? grouped.slice(0, maxItems) : grouped;
+  const hasMore = grouped.length > maxGroups;
+  const displayGroups = expanded || !hasMore ? grouped : grouped.slice(0, maxGroups);
 
   return (
     <View style={styles.container}>
@@ -147,6 +152,11 @@ export const RecentActivityGrouped: React.FC<RecentActivityGroupedProps> = ({
           ))}
         </View>
       ))}
+      {hasMore && (
+        <Pressable testID="see-all-transactions" onPress={() => setExpanded((v) => !v)} style={styles.seeAllButton}>
+          <Text style={styles.seeAll}>{expanded ? 'Show less' : 'See all'}</Text>
+        </Pressable>
+      )}
     </View>
   );
 };
@@ -154,6 +164,16 @@ export const RecentActivityGrouped: React.FC<RecentActivityGroupedProps> = ({
 const styles = StyleSheet.create({
   container: {
     marginTop: 12,
+  },
+  seeAllButton: {
+    alignItems: 'center',
+    paddingVertical: 12,
+    marginTop: 4,
+  },
+  seeAll: {
+    color: COLORS.green,
+    fontWeight: '600',
+    fontSize: 12,
   },
   emptyContainer: {
     paddingVertical: 40,

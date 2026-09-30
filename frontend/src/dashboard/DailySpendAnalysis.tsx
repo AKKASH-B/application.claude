@@ -31,21 +31,13 @@ const parseLocalDate = (dateStr: string): Date => {
 };
 
 export const getDailySpends = (transactions: Transaction[]): DailySpend[] => {
-  const today = new Date();
-  const yesterday = new Date(today);
-  yesterday.setDate(today.getDate() - 1);
-
-  const todayStr = localIso(today);
-  const yesterdayStr = localIso(yesterday);
-
+  // Always show the actual weekday + date (no "Today"/"Yesterday" relative labels).
   const getDayLabel = (dateStr: string): string => {
-    if (dateStr === todayStr) return 'Today';
-    if (dateStr === yesterdayStr) return 'Yesterday';
-    return parseLocalDate(dateStr).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+    return parseLocalDate(dateStr).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
   };
 
   const getDisplayDate = (dateStr: string): string => {
-    return parseLocalDate(dateStr).toLocaleDateString('en-US', { year: '2-digit', month: '2-digit', day: '2-digit' });
+    return parseLocalDate(dateStr).toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit' });
   };
 
   const processDay = (dateStr: string, dayLabel: string): DailySpend | null => {
