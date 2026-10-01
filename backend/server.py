@@ -221,7 +221,8 @@ class SignupResponse(TokenResponse):
 
 class ResetPinInput(BaseModel):
     username: str = Field(min_length=3, max_length=30)
-    backup_code: str = Field(min_length=16, max_length=16)
+    backup_code: Optional[str] = Field(default=None, min_length=16, max_length=16)
+    phone: Optional[str] = Field(default=None, min_length=8)
     new_pin: str = Field(min_length=6, max_length=6)
 
     @field_validator("username")
@@ -233,6 +234,13 @@ class ResetPinInput(BaseModel):
     @classmethod
     def validate_pin_field(cls, value: str) -> str:
         return validate_pin(value)
+
+    @field_validator("phone", mode="before")
+    @classmethod
+    def validate_phone(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        return normalize_phone(value)
 
 
 class TransactionCreate(BaseModel):
@@ -704,16 +712,29 @@ async def change_pin(input: ChangePinInput, user: dict[str, Any] = Depends(curre
 
 @api_router.post("/auth/reset-pin")
 async def reset_pin(input: ResetPinInput):
-    """Reset PIN using username + backup code (for forgotten PINs)."""
+    """Reset PIN using either backup code OR phone verification (for forgotten PINs)."""
+    # Require at least one recovery method
+    if not input.backup_code and not input.phone:
+        raise HTTPException(status_code=400, detail="Provide either backup code or phone number")
+
     user = await db.users.find_one({"username": input.username}, {"_id": 0})
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Username not found")
-    # Verify backup code
-    backup_hash = user.get("backup_code_hash")
-    if not backup_hash or not bcrypt.checkpw(input.backup_code.encode(), backup_hash.encode()):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid backup code")
-    if input.new_pin == user.get("pin") or (await db.users.find_one({"username": input.username}, {"_id": 0, "pin_hash": 1}) and bcrypt.checkpw(input.new_pin.encode(), user["pin_hash"].encode())):
+
+    # Verify recovery method (backup code takes priority)
+    if input.backup_code:
+        backup_hash = user.get("backup_code_hash")
+        if not backup_hash or not bcrypt.checkpw(input.backup_code.encode(), backup_hash.encode()):
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid backup code")
+    elif input.phone:
+        user_phone = user.get("phone", "")
+        if not user_phone or input.phone != user_phone:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Phone number does not match account")
+
+    # Verify new PIN is different from current
+    if bcrypt.checkpw(input.new_pin.encode(), user["pin_hash"].encode()):
         raise HTTPException(status_code=400, detail="New PIN must be different from the current one")
+
     # Reset PIN and increment token_version to invalidate all sessions
     new_hash = bcrypt.hashpw(input.new_pin.encode(), bcrypt.gensalt()).decode()
     new_version = (user.get("token_version", 0) or 0) + 1
