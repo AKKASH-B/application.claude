@@ -20,14 +20,16 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 export type SignupInput = { username: string; phone: string; pin: string };
+export type SignupResponse = { access_token: string; backup_code: string };
 
 export async function signUp(input: SignupInput) {
-  const result = await request<{ access_token: string }>("/auth/signup", {
+  const result = await request<SignupResponse>("/auth/signup", {
     method: "POST",
     body: JSON.stringify({ username: input.username, phone: input.phone, pin: input.pin }),
   });
   await storage.secureSet(TOKEN_KEY, result.access_token);
-  return request<User>("/me");
+  const user = await request<User>("/me");
+  return { user, backupCode: result.backup_code };
 }
 
 export async function signIn(username: string, pin: string) {
@@ -50,6 +52,13 @@ export async function changePin(currentPin: string, newPin: string) {
   return request<{ ok: boolean }>("/auth/change-pin", {
     method: "POST",
     body: JSON.stringify({ current_pin: currentPin, new_pin: newPin }),
+  });
+}
+
+export async function resetPin(username: string, backupCode: string, newPin: string) {
+  return request<{ ok: boolean }>("/auth/reset-pin", {
+    method: "POST",
+    body: JSON.stringify({ username, backup_code: backupCode, new_pin: newPin }),
   });
 }
 
