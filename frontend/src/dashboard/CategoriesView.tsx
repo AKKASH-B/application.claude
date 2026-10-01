@@ -1,13 +1,12 @@
 import { Feather } from "@expo/vector-icons";
 import { Pressable, Text, View, ScrollView } from "react-native";
-import { useState } from "react";
 import { COLORS, TRANSFERRED_CATEGORIES, monthLabel, shiftMonth } from "./constants";
 import { styles } from "./styles";
 import { Bar } from "./primitives";
 import type { Transaction } from "./types";
 
-export function CategoriesView({ data, max, budgetMap, onEditBudget, transactions, month }: { data: { category: string; amount: number }[]; max: number; budgetMap: Record<string, number>; onEditBudget: (c: string) => void; transactions: Transaction[]; month: string }) {
-  const [selectedMonth, setSelectedMonth] = useState(month);
+export function CategoriesView({ data, max, budgetMap, onEditBudget, transactions, month, onMonthChange }: { data: { category: string; amount: number }[]; max: number; budgetMap: Record<string, number>; onEditBudget: (c: string) => void; transactions: Transaction[]; month: string; onMonthChange: (m: string) => void }) {
+  const selectedMonth = month; // shared with the Overview month picker
 
   // Filter data by selected month
   const monthTransactions = transactions.filter(t => t.date.startsWith(selectedMonth) && t.type === "expense");
@@ -20,11 +19,11 @@ export function CategoriesView({ data, max, budgetMap, onEditBudget, transaction
   return (
     <ScrollView showsVerticalScrollIndicator={false}>
       <View style={styles.monthPicker}>
-        <Pressable onPress={() => setSelectedMonth(shiftMonth(selectedMonth, -1))} style={styles.monthNav}>
+        <Pressable onPress={() => onMonthChange(shiftMonth(selectedMonth, -1))} style={styles.monthNav}>
           <Feather name="chevron-left" size={18} color={COLORS.ink} />
         </Pressable>
         <Text style={styles.monthText}>{monthLabel(selectedMonth)}</Text>
-        <Pressable onPress={() => setSelectedMonth(shiftMonth(selectedMonth, 1))} style={styles.monthNav} disabled={shiftMonth(selectedMonth, 1) > month}>
+        <Pressable onPress={() => onMonthChange(shiftMonth(selectedMonth, 1))} style={styles.monthNav}>
           <Feather name="chevron-right" size={18} color={COLORS.ink} />
         </Pressable>
       </View>

@@ -7,7 +7,8 @@ type Op = '+' | '-' | '×' | '÷';
 type Entry = { expression: string; result: number };
 
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
-const applyOp = (a: number, b: number, o: Op) => (o === '+' ? a + b : o === '-' ? a - b : o === '×' ? a * b : b === 0 ? a : a / b);
+// Division by zero yields NaN, which the UI shows as "Can't divide by 0".
+const applyOp = (a: number, b: number, o: Op) => (o === '+' ? a + b : o === '-' ? a - b : o === '×' ? a * b : b === 0 ? NaN : a / b);
 
 export const CalculatorTab: React.FC = () => {
   const [current, setCurrent] = useState('0');
@@ -29,8 +30,10 @@ export const CalculatorTab: React.FC = () => {
 
   const chooseOp = (o: Op) => {
     const cur = Number(current);
+    if (Number.isNaN(cur)) return; // showing an error message — ignore operators until a digit is entered
     if (prev !== null && op && !overwrite) {
       const result = round2(applyOp(prev, cur, op));
+      if (!Number.isFinite(result)) { setCurrent("Can't divide by 0"); setPrev(null); setOp(null); setOverwrite(true); return; }
       setPrev(result);
       setCurrent(String(result));
     } else {
@@ -43,7 +46,9 @@ export const CalculatorTab: React.FC = () => {
   const equals = () => {
     if (prev === null || !op) return;
     const b = Number(current);
+    if (Number.isNaN(b)) return;
     const result = round2(applyOp(prev, b, op));
+    if (!Number.isFinite(result)) { setCurrent("Can't divide by 0"); setPrev(null); setOp(null); setOverwrite(true); return; }
     setHistory((h) => [{ expression: `${prev} ${op} ${b}`, result }, ...h].slice(0, 20));
     setCurrent(String(result));
     setPrev(null);

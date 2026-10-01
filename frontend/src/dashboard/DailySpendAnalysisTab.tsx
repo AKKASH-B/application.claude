@@ -5,25 +5,40 @@ import type { Transaction } from './types';
 import { COLORS, money, monthLabel, shiftMonth } from './constants';
 import { getDailySpends, getWeeklySpends } from './DailySpendAnalysis';
 import { DailySpendDetailModal, type DailySpend, type WeeklySpend } from './DailySpendAnalysis';
+import { styles as shared } from './styles';
 
 interface DailySpendTabProps {
   transactions: Transaction[];
   month: string;
+  onMonthChange: (m: string) => void;
 }
 
 const WEEKDAY_SHORT = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
-export const DailySpendAnalysisTab: React.FC<DailySpendTabProps> = ({ transactions, month }) => {
+export const DailySpendAnalysisTab: React.FC<DailySpendTabProps> = ({ transactions, month, onMonthChange }) => {
   const [selectedDailySpend, setSelectedDailySpend] = useState<DailySpend | null>(null);
-  const [selectedMonth, setSelectedMonth] = useState(month);
+  const selectedMonth = month; // shared with the Overview month picker
   const [mode, setMode] = useState<'daily' | 'weekly'>('daily');
   const monthTransactions = transactions.filter(t => t.date.startsWith(selectedMonth));
   const dailySpends = useMemo(() => getDailySpends(monthTransactions), [monthTransactions]);
   const weeklySpends = useMemo(() => getWeeklySpends(monthTransactions), [monthTransactions]);
 
+  const monthPicker = (
+    <View style={shared.monthPicker}>
+        <Pressable onPress={() => onMonthChange(shiftMonth(selectedMonth, -1))} style={shared.monthNav}>
+          <Feather name="chevron-left" size={18} color={COLORS.ink} />
+        </Pressable>
+        <Text style={shared.monthText}>{monthLabel(selectedMonth)}</Text>
+        <Pressable onPress={() => onMonthChange(shiftMonth(selectedMonth, 1))} style={shared.monthNav}>
+          <Feather name="chevron-right" size={18} color={COLORS.ink} />
+        </Pressable>
+      </View>
+  );
+
   if (dailySpends.length === 0) {
     return (
       <View style={styles.container}>
+        {monthPicker}
         <View style={styles.emptyContainer}>
           <Feather name="calendar" size={48} color={COLORS.gray} />
           <Text style={styles.emptyTitle}>No Daily Data</Text>
@@ -35,15 +50,7 @@ export const DailySpendAnalysisTab: React.FC<DailySpendTabProps> = ({ transactio
 
   return (
     <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
-      <View style={styles.monthSelector}>
-        <Pressable onPress={() => setSelectedMonth(shiftMonth(selectedMonth, -1))} style={styles.monthBtn}>
-          <Feather name="chevron-left" size={20} color={COLORS.green} />
-        </Pressable>
-        <Text style={styles.monthDisplay}>{monthLabel(selectedMonth)}</Text>
-        <Pressable onPress={() => setSelectedMonth(shiftMonth(selectedMonth, 1))} style={styles.monthBtn} disabled={shiftMonth(selectedMonth, 1) > month}>
-          <Feather name="chevron-right" size={20} color={shiftMonth(selectedMonth, 1) > month ? COLORS.muted : COLORS.green} />
-        </Pressable>
-      </View>
+      {monthPicker}
 
       <View style={styles.header}>
         <Text style={styles.title}>{mode === 'daily' ? 'Daily Spending Analysis' : 'Weekly Spending Analysis'}</Text>

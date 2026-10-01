@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "frontend",
+    "name": "SpendPulse",
     "slug": "frontend",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -23,8 +23,7 @@
       "edgeToEdgeEnabled": true,
       "package": "com.akkash.spendpulse",
       "permissions": [
-        "android.permission.READ_CONTACTS",
-        "android.permission.WRITE_CONTACTS"
+        "android.permission.READ_CONTACTS"
       ]
     },
     "web": {

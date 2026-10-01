@@ -1,13 +1,12 @@
 import { Feather } from "@expo/vector-icons";
 import { Text, View, Pressable, ScrollView } from "react-native";
-import { useState } from "react";
 import type { Transaction } from "./types";
 import { COLORS, money, monthLabel, shiftMonth } from "./constants";
 import { styles } from "./styles";
 import { Bar } from "./primitives";
 
-export function Analytics({ spent, income, data, max, transactions, month }: { spent: number; income: number; data: { category: string; amount: number }[]; max: number; transactions: Transaction[]; month: string }) {
-  const [selectedMonth, setSelectedMonth] = useState(month);
+export function Analytics({ spent, income, data, max, transactions, month, onMonthChange }: { spent: number; income: number; data: { category: string; amount: number }[]; max: number; transactions: Transaction[]; month: string; onMonthChange: (m: string) => void }) {
+  const selectedMonth = month; // shared with the Overview month picker
   const prevMonth = shiftMonth(selectedMonth, -1);
   const totalsFor = (ym: string) => {
     const rows = transactions.filter((t) => t.date.startsWith(ym));
@@ -27,11 +26,11 @@ export function Analytics({ spent, income, data, max, transactions, month }: { s
   return <>
     <ScrollView showsVerticalScrollIndicator={false}>
       <View style={styles.monthPicker}>
-        <Pressable onPress={() => setSelectedMonth(shiftMonth(selectedMonth, -1))} style={styles.monthNav}>
+        <Pressable onPress={() => onMonthChange(shiftMonth(selectedMonth, -1))} style={styles.monthNav}>
           <Feather name="chevron-left" size={18} color={COLORS.ink} />
         </Pressable>
         <Text style={styles.monthText}>{monthLabel(selectedMonth)}</Text>
-        <Pressable onPress={() => setSelectedMonth(shiftMonth(selectedMonth, 1))} style={styles.monthNav} disabled={shiftMonth(selectedMonth, 1) > month}>
+        <Pressable onPress={() => onMonthChange(shiftMonth(selectedMonth, 1))} style={styles.monthNav}>
           <Feather name="chevron-right" size={18} color={COLORS.ink} />
         </Pressable>
       </View>

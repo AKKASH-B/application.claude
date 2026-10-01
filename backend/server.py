@@ -16,6 +16,11 @@ from typing import Any, List, Literal, Optional
 import uuid
 import secrets
 import string
+import hmac
+import hashlib
+import asyncio
+import smtplib
+from email.message import EmailMessage
 from datetime import datetime, timezone, timedelta
 
 
@@ -52,6 +57,23 @@ ALLOWED_ORIGINS = [
 
 USERNAME_PATTERN = re.compile(r"^[a-zA-Z0-9_.]{3,30}$")
 PIN_PATTERN = re.compile(r"^\d{6}$")
+EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]{2,}$")
+
+# --- Email (used for PIN-recovery codes) ---------------------------------
+# Any SMTP provider works (Gmail app password, Brevo, Resend, Zoho...). Configure
+# SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PASSWORD / SMTP_FROM in the environment.
+SMTP_HOST = os.environ.get("SMTP_HOST", "")
+SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
+SMTP_USER = os.environ.get("SMTP_USER", "")
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
+SMTP_FROM = os.environ.get("SMTP_FROM", "") or SMTP_USER
+# Local testing only: when true AND SMTP is not configured, the code is printed to the
+# server log instead of emailed. The code is NEVER returned in an API response.
+DEV_LOG_OTP = os.environ.get("DEV_LOG_OTP", "").lower() in ("1", "true", "yes")
+
+OTP_TTL_MINUTES = 10
+OTP_MAX_ATTEMPTS = 5
+OTP_RESEND_SECONDS = 60
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +94,13 @@ def normalize_phone(value: str) -> str:
     if not cleaned.isdigit() or not (8 <= len(cleaned) <= 15):
         raise ValueError("Enter a valid phone number (8-15 digits).")
     return prefix + cleaned
+
+
+def normalize_email(value: str) -> str:
+    cleaned = (value or "").strip().lower()
+    if len(cleaned) > 120 or not EMAIL_PATTERN.match(cleaned):
+        raise ValueError("Enter a valid email address.")
+    return cleaned
 
 
 def validate_pin(value: str) -> str:
@@ -106,7 +135,8 @@ api_router = APIRouter(prefix="/api")
 # Define Models
 class SignupInput(BaseModel):
     username: str = Field(min_length=3, max_length=30)
-    phone: str
+    email: str = Field(max_length=120)
+    phone: Optional[str] = None
     pin: str = Field(min_length=6, max_length=6)
 
     @field_validator("username")
@@ -114,9 +144,16 @@ class SignupInput(BaseModel):
     def validate_username(cls, value: str) -> str:
         return normalize_username(value)
 
+    @field_validator("email")
+    @classmethod
+    def validate_email_field(cls, value: str) -> str:
+        return normalize_email(value)
+
     @field_validator("phone")
     @classmethod
-    def validate_phone_field(cls, value: str) -> str:
+    def validate_phone_field(cls, value: Optional[str]) -> Optional[str]:
+        if value is None or not value.strip():
+            return None
         return normalize_phone(value)
 
     @field_validator("pin")
@@ -153,14 +190,25 @@ class ChangePinInput(BaseModel):
 class UserResponse(BaseModel):
     id: str
     username: str
-    phone: str
+    phone: str = ""
+    email: str = ""
     role: str = "user"
+
+
+class DeleteAccountInput(BaseModel):
+    current_pin: str = Field(min_length=6, max_length=6)
+
+    @field_validator("current_pin")
+    @classmethod
+    def validate_pin_field(cls, value: str) -> str:
+        return validate_pin(value)
 
 
 class AdminUserSummary(BaseModel):
     id: str
     username: str
-    phone: str
+    email: str = ""
+    phone: str = ""
     role: str
     disabled: bool
     created_at: Optional[str] = None
@@ -206,34 +254,24 @@ class TokenResponse(BaseModel):
     expires_in: int
 
 
-class SignupResponse(TokenResponse):
-    backup_code: str
-
-
 class RequestOtpInput(BaseModel):
-    username: str = Field(min_length=3, max_length=30)
-    phone: str = Field(min_length=8)
+    email: str = Field(max_length=120)
 
-    @field_validator("username")
+    @field_validator("email")
     @classmethod
-    def lower_username(cls, value: str) -> str:
-        return value.strip().lower()
-
-    @field_validator("phone", mode="before")
-    @classmethod
-    def validate_phone(cls, value: str) -> str:
-        return normalize_phone(value)
+    def validate_email_field(cls, value: str) -> str:
+        return normalize_email(value)
 
 
 class ResetPinInput(BaseModel):
-    username: str = Field(min_length=3, max_length=30)
+    email: str = Field(max_length=120)
     otp: str = Field(min_length=6, max_length=6)
     new_pin: str = Field(min_length=6, max_length=6)
 
-    @field_validator("username")
+    @field_validator("email")
     @classmethod
-    def lower_username(cls, value: str) -> str:
-        return value.strip().lower()
+    def validate_email_field(cls, value: str) -> str:
+        return normalize_email(value)
 
     @field_validator("otp", "new_pin")
     @classmethod
@@ -246,6 +284,38 @@ class ResetPinInput(BaseModel):
     @classmethod
     def validate_pin_field(cls, value: str) -> str:
         return validate_pin(value)
+
+
+class SetEmailInput(BaseModel):
+    email: str = Field(max_length=120)
+    current_pin: str = Field(min_length=6, max_length=6)
+
+    @field_validator("email")
+    @classmethod
+    def validate_email_field(cls, value: str) -> str:
+        return normalize_email(value)
+
+    @field_validator("current_pin")
+    @classmethod
+    def validate_pin_field(cls, value: str) -> str:
+        return validate_pin(value)
+
+
+class VerifyEmailInput(BaseModel):
+    email: str = Field(max_length=120)
+    otp: str = Field(min_length=6, max_length=6)
+
+    @field_validator("email")
+    @classmethod
+    def validate_email_field(cls, value: str) -> str:
+        return normalize_email(value)
+
+    @field_validator("otp")
+    @classmethod
+    def validate_numeric(cls, value: str) -> str:
+        if not value.isdigit():
+            raise ValueError("must contain only digits")
+        return value
 
 
 class TransactionCreate(BaseModel):
@@ -537,6 +607,7 @@ def _to_user_response(doc: dict[str, Any]) -> UserResponse:
         id=doc["id"],
         username=doc.get("username") or "user",
         phone=doc.get("phone") or "",
+        email=doc.get("email") or "",
         role=doc.get("role") or "user",
     )
 
@@ -548,40 +619,91 @@ def _get_client_ip(request: Request) -> str:
     return "unknown"
 
 
-def _generate_backup_code() -> str:
-    """Generate a 16-character alphanumeric backup code for PIN recovery."""
-    chars = string.ascii_uppercase + string.digits
-    return ''.join(secrets.choice(chars) for _ in range(16))
-
-
 def _generate_otp() -> str:
-    """Generate a 6-digit OTP."""
+    """Generate a 6-digit one-time code."""
     return ''.join(secrets.choice(string.digits) for _ in range(6))
 
 
-async def _store_otp(username: str, otp: str) -> None:
-    """Store OTP with 10-minute expiration."""
-    expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+def _hash_otp(purpose: str, email: str, otp: str) -> str:
+    # Codes are stored hashed (keyed with the JWT secret), never in plain text.
+    return hmac.new(JWT_SECRET.encode(), f"{purpose}|{email}|{otp}".encode(), hashlib.sha256).hexdigest()
+
+
+async def _store_otp(purpose: str, email: str, otp: str, user_id: Optional[str] = None) -> None:
+    now = datetime.now(timezone.utc)
     await db.otp_tokens.update_one(
-        {"username": username},
-        {"$set": {"otp": otp, "expires_at": expires_at.isoformat()}},
-        upsert=True
+        {"purpose": purpose, "email": email},
+        {"$set": {
+            "otp_hash": _hash_otp(purpose, email, otp),
+            "user_id": user_id,
+            "attempts": 0,
+            "sent_at": now.isoformat(),
+            "expires_at": (now + timedelta(minutes=OTP_TTL_MINUTES)).isoformat(),
+        }},
+        upsert=True,
     )
 
 
-async def _verify_otp(username: str, otp: str) -> bool:
-    """Verify OTP and delete it if valid."""
-    doc = await db.otp_tokens.find_one({"username": username}, {"_id": 0})
+async def _otp_resend_wait(purpose: str, email: str) -> int:
+    """Seconds the caller must still wait before another code may be sent."""
+    doc = await db.otp_tokens.find_one({"purpose": purpose, "email": email}, {"_id": 0, "sent_at": 1})
+    if not doc or not doc.get("sent_at"):
+        return 0
+    elapsed = (datetime.now(timezone.utc) - datetime.fromisoformat(doc["sent_at"])).total_seconds()
+    return max(0, int(OTP_RESEND_SECONDS - elapsed))
+
+
+async def _verify_otp(purpose: str, email: str, otp: str) -> Optional[dict]:
+    """Return the stored code record if `otp` is valid, else None.
+    Codes are single-use, expire, and are burned after OTP_MAX_ATTEMPTS wrong guesses."""
+    doc = await db.otp_tokens.find_one({"purpose": purpose, "email": email}, {"_id": 0})
     if not doc:
-        return False
-    if doc.get("otp") != otp:
-        return False
-    expires_at = datetime.fromisoformat(doc["expires_at"])
-    if datetime.now(timezone.utc) > expires_at:
-        await db.otp_tokens.delete_one({"username": username})
-        return False
-    await db.otp_tokens.delete_one({"username": username})
-    return True
+        return None
+    if datetime.now(timezone.utc) > datetime.fromisoformat(doc["expires_at"]):
+        await db.otp_tokens.delete_one({"purpose": purpose, "email": email})
+        return None
+    if doc.get("attempts", 0) >= OTP_MAX_ATTEMPTS:
+        await db.otp_tokens.delete_one({"purpose": purpose, "email": email})
+        return None
+    if not hmac.compare_digest(doc.get("otp_hash", ""), _hash_otp(purpose, email, otp)):
+        await db.otp_tokens.update_one({"purpose": purpose, "email": email}, {"$inc": {"attempts": 1}})
+        return None
+    await db.otp_tokens.delete_one({"purpose": purpose, "email": email})
+    return doc
+
+
+def _send_email_sync(to_email: str, subject: str, body: str) -> None:
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = SMTP_FROM
+    msg["To"] = to_email
+    msg.set_content(body)
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15) as smtp:
+        smtp.starttls()
+        if SMTP_USER:
+            smtp.login(SMTP_USER, SMTP_PASSWORD)
+        smtp.send_message(msg)
+
+
+async def _send_code_email(to_email: str, code: str, purpose: str) -> None:
+    """Email a verification code. Never raises to the caller's response path with details."""
+    what = "reset your SpendPulse PIN" if purpose == "reset" else "verify your email for SpendPulse"
+    body = (
+        f"Your SpendPulse code is: {code}\n\n"
+        f"Use it to {what}. It expires in {OTP_TTL_MINUTES} minutes.\n\n"
+        "If you didn't request this, you can ignore this email — your PIN has not been changed."
+    )
+    if not SMTP_HOST:
+        if DEV_LOG_OTP:
+            logger.warning("DEV_LOG_OTP: %s code for %s is %s", purpose, to_email, code)
+            return
+        logger.error("SMTP is not configured; cannot send %s code", purpose)
+        raise HTTPException(status_code=503, detail="Email service is not available right now. Please try again later.")
+    try:
+        await asyncio.to_thread(_send_email_sync, to_email, "Your SpendPulse code", body)
+    except Exception:
+        logger.exception("Failed to send %s email", purpose)
+        raise HTTPException(status_code=503, detail="Couldn't send the email. Please try again in a moment.")
 
 
 async def _login_lockout_remaining_seconds(username: str, ip: str) -> int:
@@ -644,7 +766,7 @@ async def current_user(credentials: HTTPAuthorizationCredentials | None = Depend
             raise ValueError("missing user")
     except (jwt.InvalidTokenError, ValueError):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
-    user = await db.users.find_one({"id": user_id}, {"_id": 0, "id": 1, "username": 1, "phone": 1, "role": 1, "disabled": 1, "token_version": 1})
+    user = await db.users.find_one({"id": user_id}, {"_id": 0, "id": 1, "username": 1, "phone": 1, "email": 1, "role": 1, "disabled": 1, "token_version": 1})
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User no longer exists")
     if await db.revoked_tokens.find_one({"token": credentials.credentials}, {"_id": 0}):
@@ -672,27 +794,27 @@ async def root():
     return {"message": "Hello World"}
 
 
-@api_router.post("/auth/signup", response_model=SignupResponse, status_code=201)
+@api_router.post("/auth/signup", response_model=TokenResponse, status_code=201)
 async def signup(input: SignupInput):
     if await db.users.find_one({"username": input.username}, {"_id": 0}):
         raise HTTPException(status_code=409, detail="Username already taken. Please choose another username.")
+    if await db.users.find_one({"email": input.email}, {"_id": 0}):
+        raise HTTPException(status_code=409, detail="That email is already registered. Try logging in instead.")
     user_id = str(uuid.uuid4())
     role = await _claim_admin_role(user_id, input.username, input.phone)
-    backup_code = _generate_backup_code()
-    backup_code_hash = bcrypt.hashpw(backup_code.encode(), bcrypt.gensalt()).decode()
     user = {
         "id": user_id,
         "username": input.username,
-        "phone": input.phone,
+        "email": input.email,
+        "phone": input.phone or "",
         "pin_hash": bcrypt.hashpw(input.pin.encode(), bcrypt.gensalt()).decode(),
-        "backup_code_hash": backup_code_hash,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "role": role,
         "disabled": False,
         "token_version": 0,
     }
     await db.users.insert_one(user)
-    return SignupResponse(access_token=create_token(user["id"], 0), expires_in=TOKEN_MINUTES * 60, backup_code=backup_code)
+    return TokenResponse(access_token=create_token(user["id"], 0), expires_in=TOKEN_MINUTES * 60)
 
 
 @api_router.post("/auth/login", response_model=TokenResponse)
@@ -721,6 +843,27 @@ async def me(user: dict[str, Any] = Depends(current_user)):
     return _to_user_response(user)
 
 
+@api_router.post("/me/delete")
+async def delete_my_account(input: DeleteAccountInput, user: dict[str, Any] = Depends(current_user)):
+    """Permanently delete the signed-in user's account and all of their data (required by app stores)."""
+    if user.get("role") == "admin":
+        raise HTTPException(status_code=400, detail="Admin accounts can't be deleted from the app.")
+    stored = await db.users.find_one({"id": user["id"]}, {"_id": 0, "pin_hash": 1, "username": 1, "email": 1})
+    if not stored or not bcrypt.checkpw(input.current_pin.encode(), stored["pin_hash"].encode()):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Current PIN is incorrect")
+    uid = user["id"]
+    await db.transactions.delete_many({"owner_id": uid})
+    await db.budgets.delete_many({"owner_id": uid})
+    await db.savings_goals.delete_many({"owner_id": uid})
+    await db.splits.delete_many({"owner_id": uid})
+    await db.friends.delete_many({"owner_id": uid})
+    await db.login_attempts.delete_many({"username": stored.get("username")})
+    if stored.get("email"):
+        await db.otp_tokens.delete_many({"email": stored["email"]})
+    await db.users.delete_one({"id": uid})
+    return {"ok": True}
+
+
 @api_router.post("/auth/logout")
 async def logout(credentials: HTTPAuthorizationCredentials | None = Depends(bearer), user: dict[str, Any] = Depends(current_user)):
     if credentials:
@@ -745,52 +888,84 @@ async def change_pin(input: ChangePinInput, user: dict[str, Any] = Depends(curre
     return {"ok": True}
 
 
+RECOVERY_REPLY = {"ok": True, "message": "If that email is registered, a 6-digit code is on its way. It's valid for 10 minutes."}
+
+
 @api_router.post("/auth/request-otp")
-async def request_otp(input: RequestOtpInput):
-    """Request OTP for PIN recovery. OTP is sent via SMS in production."""
-    user = await db.users.find_one({"username": input.username}, {"_id": 0})
-    if not user:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Username not found")
+async def request_otp(input: RequestOtpInput, request: Request):
+    """Email a 6-digit code to the registered address so a forgotten PIN can be reset.
+    The reply is identical whether or not the email is registered (no account enumeration),
+    and the code is never returned in the response."""
+    # Throttle per client IP so this can't be used to spam inboxes.
+    ip = _get_client_ip(request)
+    since = (datetime.now(timezone.utc) - timedelta(minutes=15)).isoformat()
+    recent = await db.otp_requests.count_documents({"ip": ip, "at": {"$gte": since}})
+    if recent >= 10:
+        raise HTTPException(status_code=429, detail="Too many requests. Please try again in a few minutes.")
+    await db.otp_requests.insert_one({"ip": ip, "at": datetime.now(timezone.utc).isoformat(), "expires_at": datetime.now(timezone.utc) + timedelta(minutes=30)})
 
-    # Verify phone matches account
-    user_phone = user.get("phone", "")
-    if not user_phone or input.phone != user_phone:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Phone number does not match account")
-
-    # Generate and store OTP
+    user = await db.users.find_one({"email": input.email}, {"_id": 0, "id": 1, "disabled": 1})
+    if not user or user.get("disabled"):
+        return RECOVERY_REPLY
+    if await _otp_resend_wait("reset", input.email) > 0:
+        return RECOVERY_REPLY  # a code was just sent; don't send another yet
     otp = _generate_otp()
-    await _store_otp(input.username, otp)
-
-    # In production, send OTP via SMS here
-    # For now, return OTP for testing (remove in production)
-    return {"ok": True, "otp": otp, "message": "OTP sent to your phone. Valid for 10 minutes."}
+    await _store_otp("reset", input.email, otp, user["id"])
+    await _send_code_email(input.email, otp, "reset")
+    return RECOVERY_REPLY
 
 
 @api_router.post("/auth/reset-pin")
 async def reset_pin(input: ResetPinInput):
-    """Reset PIN using OTP verification (for forgotten PINs)."""
-    user = await db.users.find_one({"username": input.username}, {"_id": 0})
+    """Set a new PIN using the emailed code."""
+    record = await _verify_otp("reset", input.email, input.otp)
+    if not record:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="That code is invalid or has expired. Request a new one.")
+    user = await db.users.find_one({"id": record.get("user_id"), "email": input.email}, {"_id": 0})
     if not user:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Username not found")
-
-    # Verify OTP
-    if not await _verify_otp(input.username, input.otp):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired OTP")
-
-    # Verify new PIN is different from current
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="That code is invalid or has expired. Request a new one.")
     if bcrypt.checkpw(input.new_pin.encode(), user["pin_hash"].encode()):
         raise HTTPException(status_code=400, detail="New PIN must be different from the current one")
-
-    # Reset PIN and increment token_version to invalidate all sessions
+    # Reset PIN, bump token_version to sign out every existing session, clear any lockout.
     new_hash = bcrypt.hashpw(input.new_pin.encode(), bcrypt.gensalt()).decode()
     new_version = (user.get("token_version", 0) or 0) + 1
-    await db.users.update_one({"username": input.username}, {"$set": {"pin_hash": new_hash, "token_version": new_version}})
+    await db.users.update_one({"id": user["id"]}, {"$set": {"pin_hash": new_hash, "token_version": new_version}})
+    await db.login_attempts.delete_many({"username": user["username"]})
     return {"ok": True, "message": "PIN reset successfully. Please log in with your new PIN."}
+
+
+@api_router.post("/auth/set-email")
+async def set_email(input: SetEmailInput, user: dict[str, Any] = Depends(current_user)):
+    """Signed-in users add or change their recovery email. Needs the current PIN, then a code sent to the new address."""
+    stored = await db.users.find_one({"id": user["id"]}, {"_id": 0, "pin_hash": 1})
+    if not stored or not bcrypt.checkpw(input.current_pin.encode(), stored["pin_hash"].encode()):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Current PIN is incorrect")
+    taken = await db.users.find_one({"email": input.email, "id": {"$ne": user["id"]}}, {"_id": 0, "id": 1})
+    if taken:
+        raise HTTPException(status_code=409, detail="That email is already used by another account.")
+    wait = await _otp_resend_wait("verify", input.email)
+    if wait > 0:
+        raise HTTPException(status_code=429, detail=f"Please wait {wait}s before requesting another code.")
+    otp = _generate_otp()
+    await _store_otp("verify", input.email, otp, user["id"])
+    await _send_code_email(input.email, otp, "verify")
+    return {"ok": True, "message": "We emailed a 6-digit code to that address."}
+
+
+@api_router.post("/auth/verify-email")
+async def verify_email(input: VerifyEmailInput, user: dict[str, Any] = Depends(current_user)):
+    record = await _verify_otp("verify", input.email, input.otp)
+    if not record or record.get("user_id") != user["id"]:
+        raise HTTPException(status_code=400, detail="That code is invalid or has expired.")
+    if await db.users.find_one({"email": input.email, "id": {"$ne": user["id"]}}, {"_id": 0, "id": 1}):
+        raise HTTPException(status_code=409, detail="That email is already used by another account.")
+    await db.users.update_one({"id": user["id"]}, {"$set": {"email": input.email}})
+    return {"ok": True, "email": input.email}
 
 
 @api_router.get("/transactions", response_model=List[Transaction])
 async def get_transactions(user: dict[str, Any] = Depends(current_user)):
-    docs = await db.transactions.find({"owner_id": user["id"]}, {"_id": 0, "owner_id": 0}).sort("date", -1).to_list(2000)
+    docs = await db.transactions.find({"owner_id": user["id"]}, {"_id": 0, "owner_id": 0}).sort("date", -1).to_list(5000)
     return [Transaction(**doc) for doc in docs]
 
 
@@ -803,9 +978,16 @@ async def export_transactions(month: Optional[str] = None, user: dict[str, Any] 
         query["date"] = {"$regex": f"^{month}"}
     docs = await db.transactions.find(query, {"_id": 0, "owner_id": 0}).sort("date", -1).to_list(5000)
     lines = ["date,type,category,amount,note"]
+    def cell(value: Any) -> str:
+        # Quote every text cell and neutralise spreadsheet formulas (=, +, -, @) so a crafted
+        # note can't run as a formula when the CSV is opened in Excel/Sheets.
+        text = str(value or "").replace('"', '""')
+        if text[:1] in ("=", "+", "-", "@", "\t", "\r"):
+            text = "'" + text
+        return f'"{text}"'
+
     for d in docs:
-        note = (d.get("note") or "").replace('"', '""')
-        lines.append(f'{d["date"]},{d["type"]},{d["category"]},{d["amount"]},"{note}"')
+        lines.append(f'{d["date"]},{d["type"]},{cell(d.get("category"))},{d["amount"]},{cell(d.get("note"))}')
     csv = "\n".join(lines) + "\n"
     return PlainTextResponse(content=csv, media_type="text/csv", headers={"Content-Disposition": f'attachment; filename="spendpulse-{month or "all"}.csv"'})
 
@@ -937,7 +1119,7 @@ async def admin_list_users(admin: dict[str, Any] = Depends(current_admin)):
         txs = await db.transactions.find({"owner_id": u["id"]}, {"_id": 0, "type": 1, "amount": 1}).to_list(10000)
         balance = sum(t["amount"] if t["type"] == "income" else (-t["amount"] if t["type"] == "expense" else 0) for t in txs)
         summaries.append(AdminUserSummary(
-            id=u["id"], username=u.get("username") or "user", phone=u.get("phone") or "",
+            id=u["id"], username=u.get("username") or "user", email=u.get("email") or "", phone=u.get("phone") or "",
             role=u.get("role") or "user", disabled=bool(u.get("disabled")),
             created_at=u.get("created_at"), transaction_count=len(txs), balance=balance,
         ))
@@ -964,8 +1146,9 @@ async def admin_reset_pin(user_id: str, input: AdminResetPinInput, admin: dict[s
     if not target:
         raise HTTPException(status_code=404, detail="User not found")
     new_hash = bcrypt.hashpw(input.new_pin.encode(), bcrypt.gensalt()).decode()
-    await db.users.update_one({"id": user_id}, {"$set": {"pin_hash": new_hash}})
-    await _clear_login_failures(target.get("username") or "")
+    new_version = (target.get("token_version", 0) or 0) + 1
+    await db.users.update_one({"id": user_id}, {"$set": {"pin_hash": new_hash, "token_version": new_version}})
+    await db.login_attempts.delete_many({"username": target.get("username") or ""})
     return {"ok": True}
 
 
@@ -1256,8 +1439,17 @@ logging.basicConfig(
 async def _startup_indexes():
     try:
         await db.users.create_index("username", unique=True, partialFilterExpression={"username": {"$exists": True}})
-        await db.login_attempts.create_index("username", unique=True)
+        # Attempts are tracked per (username, ip); drop the old username-only unique index if present.
+        try:
+            await db.login_attempts.drop_index("username_1")
+        except Exception:
+            pass
+        await db.login_attempts.create_index([("username", 1), ("ip", 1)], unique=True)
         await db.admin_claims.create_index("key", unique=True)
+        await db.users.create_index("email", unique=True, partialFilterExpression={"email": {"$type": "string"}})
+        await db.otp_tokens.delete_many({"purpose": {"$exists": False}})  # old phone-OTP records
+        await db.otp_tokens.create_index([("purpose", 1), ("email", 1)], unique=True)
+        await db.otp_requests.create_index("expires_at", expireAfterSeconds=0)
         # TTL index: Mongo auto-deletes a revoked_tokens doc once its expires_at
         # (the JWT's own expiry) is in the past, so the denylist self-cleans
         # instead of growing forever.

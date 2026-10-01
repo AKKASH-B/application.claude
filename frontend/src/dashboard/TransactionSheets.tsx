@@ -106,7 +106,7 @@ export function SavingsGoalSheet({ visible, goal, saved, onClose, onSave, onRemo
             <Text style={styles.modalTitle}>{goal ? "Edit goal" : "New savings goal"}</Text>
             <Pressable testID="close-savings-goal" onPress={onClose}><Feather name="x" size={22} color={COLORS.muted} /></Pressable>
           </View>
-          {goal ? <Text style={styles.emptyText}>You’ve set aside {money(saved)} toward this goal.</Text> : <Text style={styles.emptyText}>Name a target, then fund it from the Savings tab.</Text>}
+          {goal ? <Text style={styles.emptyText}>You’ve set aside {money(saved)} toward this goal.</Text> : <Text style={styles.emptyText}>Name a target, then add a Savings transaction and pick this goal to fund it.</Text>}
           <Text style={styles.inputLabel}>GOAL NAME</Text>
           <TextInput testID="savings-goal-name" value={name} onChangeText={setName} placeholder="e.g. Emergency Fund" placeholderTextColor="#A9AAA5" style={styles.input} />
           <Text style={styles.inputLabel}>TARGET AMOUNT</Text>

@@ -1,7 +1,7 @@
 import { storage } from "@/src/utils/storage";
 const API = `${process.env.EXPO_PUBLIC_BACKEND_URL || ""}/api`;
 const TOKEN_KEY = "spendpulse-auth-token";
-export type User = { id: string; username: string; phone: string; role?: string };
+export type User = { id: string; username: string; phone?: string; email?: string; role?: string };
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const token = await storage.secureGet(TOKEN_KEY, null);
@@ -19,17 +19,16 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return body as T;
 }
 
-export type SignupInput = { username: string; phone: string; pin: string };
-export type SignupResponse = { access_token: string; backup_code: string };
+export type SignupInput = { username: string; email: string; pin: string };
 
 export async function signUp(input: SignupInput) {
-  const result = await request<SignupResponse>("/auth/signup", {
+  const result = await request<{ access_token: string }>("/auth/signup", {
     method: "POST",
-    body: JSON.stringify({ username: input.username, phone: input.phone, pin: input.pin }),
+    body: JSON.stringify({ username: input.username, email: input.email, pin: input.pin }),
   });
   await storage.secureSet(TOKEN_KEY, result.access_token);
   const user = await request<User>("/me");
-  return { user, backupCode: result.backup_code };
+  return { user };
 }
 
 export async function signIn(username: string, pin: string) {
@@ -55,10 +54,40 @@ export async function changePin(currentPin: string, newPin: string) {
   });
 }
 
-export async function resetPin(username: string, newPin: string, backupCode?: string, phone?: string) {
+export async function requestOtp(email: string) {
+  return request<{ ok: boolean; message?: string }>("/auth/request-otp", {
+    method: "POST",
+    body: JSON.stringify({ email }),
+  });
+}
+
+export async function resetPin(email: string, otp: string, newPin: string) {
   return request<{ ok: boolean }>("/auth/reset-pin", {
     method: "POST",
-    body: JSON.stringify({ username, new_pin: newPin, ...(backupCode && { backup_code: backupCode }), ...(phone && { phone }) }),
+    body: JSON.stringify({ email, otp, new_pin: newPin }),
+  });
+}
+
+export async function deleteAccount(currentPin: string) {
+  const result = await request<{ ok: boolean }>("/me/delete", {
+    method: "POST",
+    body: JSON.stringify({ current_pin: currentPin }),
+  });
+  await storage.secureRemove(TOKEN_KEY);
+  return result;
+}
+
+export async function setRecoveryEmail(email: string, currentPin: string) {
+  return request<{ ok: boolean; message?: string }>("/auth/set-email", {
+    method: "POST",
+    body: JSON.stringify({ email, current_pin: currentPin }),
+  });
+}
+
+export async function verifyRecoveryEmail(email: string, otp: string) {
+  return request<{ ok: boolean; email: string }>("/auth/verify-email", {
+    method: "POST",
+    body: JSON.stringify({ email, otp }),
   });
 }
 
