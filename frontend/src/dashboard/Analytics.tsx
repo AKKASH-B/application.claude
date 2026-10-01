@@ -26,13 +26,13 @@ export function Analytics({ spent, income, data, max, transactions, month }: { s
   ];
   return <>
     <ScrollView showsVerticalScrollIndicator={false}>
-      <View style={styles.monthSelector}>
-        <Pressable onPress={() => setSelectedMonth(shiftMonth(selectedMonth, -1))} style={styles.monthBtn}>
-          <Feather name="chevron-left" size={20} color={COLORS.green} />
+      <View style={styles.monthPicker}>
+        <Pressable onPress={() => setSelectedMonth(shiftMonth(selectedMonth, -1))} style={styles.monthNav}>
+          <Feather name="chevron-left" size={18} color={COLORS.ink} />
         </Pressable>
-        <Text style={styles.monthDisplay}>{monthLabel(selectedMonth)}</Text>
-        <Pressable onPress={() => setSelectedMonth(shiftMonth(selectedMonth, 1))} style={styles.monthBtn} disabled={shiftMonth(selectedMonth, 1) > month}>
-          <Feather name="chevron-right" size={20} color={shiftMonth(selectedMonth, 1) > month ? COLORS.muted : COLORS.green} />
+        <Text style={styles.monthText}>{monthLabel(selectedMonth)}</Text>
+        <Pressable onPress={() => setSelectedMonth(shiftMonth(selectedMonth, 1))} style={styles.monthNav} disabled={shiftMonth(selectedMonth, 1) > month}>
+          <Feather name="chevron-right" size={18} color={COLORS.ink} />
         </Pressable>
       </View>
 
