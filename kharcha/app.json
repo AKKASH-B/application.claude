@@ -1,0 +1,40 @@
+{
+  "expo": {
+    "name": "Kharcha",
+    "slug": "kharcha",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "scheme": "kharcha",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0F5C45"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.akkash.kharcha",
+      "buildNumber": "1",
+      "config": { "usesNonExemptEncryption": false }
+    },
+    "android": {
+      "package": "com.akkash.kharcha",
+      "versionCode": 1,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0F5C45"
+      },
+      "edgeToEdgeEnabled": true
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "single",
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": ["expo-router", "expo-secure-store"],
+    "experiments": { "typedRoutes": false },
+    "extra": { "router": {} }
+  }
+}

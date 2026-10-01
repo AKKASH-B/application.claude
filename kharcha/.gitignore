@@ -1,0 +1,11 @@
+node_modules/
+.expo/
+dist/
+.vercel/
+.env
+.env.*
+!.env.example
+logs/
+*.log
+*.tsbuildinfo
+expo-env.d.ts
