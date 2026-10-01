@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Feather } from "@expo/vector-icons";
 import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, SafeAreaView, ScrollView, Text, TextInput, View, Clipboard } from "react-native";
-import { signIn, signUp, resetPin, User } from "@/src/auth";
+import { signIn, signUp, resetPin, requestOtp, User } from "@/src/auth";
 import { styles } from "./styles";
 import { authStyles } from "./styles";
 
@@ -10,8 +10,9 @@ export function AuthScreen({ onAuthenticated }: { onAuthenticated: (user: User) 
   const [username, setUsername] = useState("");
   const [phone, setPhone] = useState("");
   const [pin, setPin] = useState("");
-  const [backupCode, setBackupCode] = useState("");
+  const [otp, setOtp] = useState("");
   const [newPin, setNewPin] = useState("");
+  const [otpSent, setOtpSent] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -23,8 +24,8 @@ export function AuthScreen({ onAuthenticated }: { onAuthenticated: (user: User) 
     setMessage("");
     setPin("");
     setNewPin("");
-    setBackupCode("");
-    setCopiedBackupCode(false);
+    setOtp("");
+    setOtpSent(false);
   };
 
   const doLogin = async () => {
@@ -52,14 +53,27 @@ export function AuthScreen({ onAuthenticated }: { onAuthenticated: (user: User) 
     finally { setBusy(false); }
   };
 
-  const doResetPin = async () => {
+  const sendOtp = async () => {
     const u = username.trim().toLowerCase();
     if (u.length < 3) { setError("Enter your username."); return; }
-    if (backupCode.trim().length !== 16) { setError("Backup code must be 16 characters."); return; }
+    if (phone.trim().length < 8) { setError("Enter a valid phone number."); return; }
+    setBusy(true); setError(""); setMessage("");
+    try {
+      await requestOtp(u, phone.trim());
+      setOtpSent(true);
+      setMessage("✅ OTP sent to your phone. Valid for 10 minutes.");
+    } catch (e) { setError(e instanceof Error ? e.message : "Failed to send OTP"); }
+    finally { setBusy(false); }
+  };
+
+  const doResetPin = async () => {
+    const u = username.trim().toLowerCase();
+    if (!otpSent) { setError("Send OTP first."); return; }
+    if (!/^\d{6}$/.test(otp)) { setError("Enter the 6-digit OTP."); return; }
     if (!/^\d{6}$/.test(newPin)) { setError("New PIN must be exactly 6 digits."); return; }
     setBusy(true); setError(""); setMessage("");
     try {
-      await resetPin(u, backupCode.trim(), newPin);
+      await resetPin(u, otp, newPin);
       setMessage("✅ PIN reset successfully! You can now log in with your new PIN.");
       setTimeout(() => switchMode("login"), 2000);
     } catch (e) { setError(e instanceof Error ? e.message : "PIN reset failed"); }
@@ -87,16 +101,28 @@ export function AuthScreen({ onAuthenticated }: { onAuthenticated: (user: User) 
             </Pressable>
           </> : mode === "reset" ? <>
             <Text style={styles.inputLabel}>USERNAME</Text>
-            <TextInput testID="reset-username" value={username} onChangeText={setUsername} autoCapitalize="none" autoCorrect={false} placeholder="e.g. akkash_saba" placeholderTextColor="#A9AAA5" style={styles.input} />
-            <Text style={styles.inputLabel}>BACKUP CODE</Text>
-            <TextInput testID="reset-backup-code" value={backupCode} onChangeText={setBackupCode} autoCapitalize="characters" autoCorrect={false} placeholder="16-character code" placeholderTextColor="#A9AAA5" style={styles.input} />
-            <Text style={styles.inputLabel}>NEW PIN</Text>
-            <TextInput testID="reset-pin" value={newPin} onChangeText={(v) => setNewPin(v.replace(/[^0-9]/g, "").slice(0, 6))} keyboardType="number-pad" secureTextEntry placeholder="6-digit PIN" placeholderTextColor="#A9AAA5" style={[styles.input, { letterSpacing: 6 }]} maxLength={6} />
-            {error ? <Text style={authStyles.authError}>{error}</Text> : null}
-            {message ? <Text style={{ color: "#2E7D32", marginVertical: 8, fontSize: 13 }}>{message}</Text> : null}
-            <Pressable testID="reset-submit" onPress={doResetPin} disabled={busy} style={[styles.save, busy && authStyles.disabled]}>
-              {busy ? <ActivityIndicator color="#FFF" /> : <Text style={styles.saveText}>Reset PIN</Text>}
-            </Pressable>
+            <TextInput testID="reset-username" value={username} onChangeText={setUsername} autoCapitalize="none" autoCorrect={false} placeholder="e.g. akkash_saba" placeholderTextColor="#A9AAA5" style={[styles.input, otpSent && { color: "#999" }]} editable={!otpSent} />
+            <Text style={styles.inputLabel}>PHONE NUMBER</Text>
+            <TextInput testID="reset-phone" value={phone} onChangeText={setPhone} keyboardType="phone-pad" placeholder="e.g. 9876543210" placeholderTextColor="#A9AAA5" style={[styles.input, otpSent && { color: "#999" }]} editable={!otpSent} />
+            {!otpSent ? <>
+              {error ? <Text style={authStyles.authError}>{error}</Text> : null}
+              <Pressable testID="reset-send-otp" onPress={sendOtp} disabled={busy} style={[styles.save, busy && authStyles.disabled]}>
+                {busy ? <ActivityIndicator color="#FFF" /> : <Text style={styles.saveText}>Send OTP</Text>}
+              </Pressable>
+            </> : <>
+              <Text style={styles.inputLabel}>OTP CODE</Text>
+              <TextInput testID="reset-otp" value={otp} onChangeText={(v) => setOtp(v.replace(/[^0-9]/g, "").slice(0, 6))} keyboardType="number-pad" placeholder="6-digit code" placeholderTextColor="#A9AAA5" style={[styles.input, { letterSpacing: 6 }]} maxLength={6} />
+              <Text style={styles.inputLabel}>NEW PIN</Text>
+              <TextInput testID="reset-pin" value={newPin} onChangeText={(v) => setNewPin(v.replace(/[^0-9]/g, "").slice(0, 6))} keyboardType="number-pad" secureTextEntry placeholder="6-digit PIN" placeholderTextColor="#A9AAA5" style={[styles.input, { letterSpacing: 6 }]} maxLength={6} />
+              {error ? <Text style={authStyles.authError}>{error}</Text> : null}
+              {message ? <Text style={{ color: "#2E7D32", marginVertical: 8, fontSize: 13 }}>{message}</Text> : null}
+              <Pressable testID="reset-submit" onPress={doResetPin} disabled={busy} style={[styles.save, busy && authStyles.disabled]}>
+                {busy ? <ActivityIndicator color="#FFF" /> : <Text style={styles.saveText}>Reset PIN</Text>}
+              </Pressable>
+              <Pressable onPress={() => setOtpSent(false)} style={{ marginTop: 12, alignItems: "center" }}>
+                <Text style={{ color: "#FF9800", fontSize: 12, fontWeight: "600" }}>← Back</Text>
+              </Pressable>
+            </>}
           </> : <>
             <Text style={styles.inputLabel}>USERNAME</Text>
             <TextInput testID="auth-username" value={username} onChangeText={setUsername} autoCapitalize="none" autoCorrect={false} placeholder="e.g. akkash_saba" placeholderTextColor="#A9AAA5" style={styles.input} />
