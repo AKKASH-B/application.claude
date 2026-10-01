@@ -29,7 +29,8 @@ export function Screen({ children, onRefresh, refreshing, scroll = true, padBott
 }) {
   const t = useTheme();
   const insets = useSafeAreaInsets();
-  const content = [{ padding: 16, paddingBottom: padBottom + insets.bottom, gap: 14, width: "100%", maxWidth: 640, alignSelf: "center" as const }, style];
+  const base: ViewStyle = { padding: 16, paddingBottom: padBottom + insets.bottom, gap: 14, width: "100%", maxWidth: 640, alignSelf: "center" };
+  const content = [base, style];
   return (
     <KeyboardAvoidingView style={{ flex: 1, backgroundColor: t.bg }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
       {scroll ? (
