@@ -1,12 +1,14 @@
 import { Feather } from "@expo/vector-icons";
-import { Text, View } from "react-native";
+import { Text, View, Pressable, ScrollView } from "react-native";
+import { useState } from "react";
 import type { Transaction } from "./types";
 import { COLORS, money, monthLabel, shiftMonth } from "./constants";
 import { styles } from "./styles";
 import { Bar } from "./primitives";
 
 export function Analytics({ spent, income, data, max, transactions, month }: { spent: number; income: number; data: { category: string; amount: number }[]; max: number; transactions: Transaction[]; month: string }) {
-  const prevMonth = shiftMonth(month, -1);
+  const [selectedMonth, setSelectedMonth] = useState(month);
+  const prevMonth = shiftMonth(selectedMonth, -1);
   const totalsFor = (ym: string) => {
     const rows = transactions.filter((t) => t.date.startsWith(ym));
     return {
@@ -15,7 +17,7 @@ export function Analytics({ spent, income, data, max, transactions, month }: { s
       savings: rows.filter((t) => t.type === "savings").reduce((s, t) => s + t.amount, 0),
     };
   };
-  const cur = totalsFor(month);
+  const cur = totalsFor(selectedMonth);
   const prev = totalsFor(prevMonth);
   const rows: { label: string; a: number; b: number; tone: string; goodDown: boolean }[] = [
     { label: "Transferred", a: cur.spent, b: prev.spent, tone: COLORS.red, goodDown: true },
@@ -23,11 +25,22 @@ export function Analytics({ spent, income, data, max, transactions, month }: { s
     { label: "Savings", a: cur.savings, b: prev.savings, tone: COLORS.gold, goodDown: false },
   ];
   return <>
-    <View style={styles.card}>
-      <View style={styles.rowBetween}>
-        <Text style={styles.cardTitle}>Month vs month</Text>
-        <Text style={styles.sectionSub}>{monthLabel(month).split(" ")[0]} vs {monthLabel(prevMonth).split(" ")[0]}</Text>
+    <ScrollView showsVerticalScrollIndicator={false}>
+      <View style={styles.monthSelector}>
+        <Pressable onPress={() => setSelectedMonth(shiftMonth(selectedMonth, -1))} style={styles.monthBtn}>
+          <Feather name="chevron-left" size={20} color={COLORS.green} />
+        </Pressable>
+        <Text style={styles.monthDisplay}>{monthLabel(selectedMonth)}</Text>
+        <Pressable onPress={() => setSelectedMonth(shiftMonth(selectedMonth, 1))} style={styles.monthBtn} disabled={shiftMonth(selectedMonth, 1) > month}>
+          <Feather name="chevron-right" size={20} color={shiftMonth(selectedMonth, 1) > month ? COLORS.muted : COLORS.green} />
+        </Pressable>
       </View>
+
+      <View style={styles.card}>
+        <View style={styles.rowBetween}>
+          <Text style={styles.cardTitle}>Month vs month</Text>
+          <Text style={styles.sectionSub}>{monthLabel(selectedMonth).split(" ")[0]} vs {monthLabel(prevMonth).split(" ")[0]}</Text>
+        </View>
       {rows.map((r) => {
         const diff = r.a - r.b;
         const pct = r.b > 0 ? Math.round((diff / r.b) * 100) : (r.a > 0 ? 100 : 0);
@@ -54,7 +67,8 @@ export function Analytics({ spent, income, data, max, transactions, month }: { s
         );
       })}
     </View>
-    <View style={styles.card}><Text style={styles.cardTitle}>Cash flow this month</Text><View style={styles.flow}><View style={[styles.flowBar, { height: Math.max(18, Math.min(130, income / Math.max(income, spent, 1) * 130)), backgroundColor: COLORS.green }]} /><View style={[styles.flowBar, { height: Math.max(18, Math.min(130, spent / Math.max(income, spent, 1) * 130)), backgroundColor: COLORS.red }]} /></View><View style={styles.flowLabels}><Text style={styles.emptyText}>Received {money(income)}</Text><Text style={styles.emptyText}>Transferred {money(spent)}</Text></View></View>
-    <View style={styles.card}><Text style={styles.cardTitle}>Top categories</Text>{data.length ? data.map((x) => <Bar key={x.category} category={x.category} amount={x.amount} max={max} />) : <Text style={styles.emptyText}>Not enough data for trends yet.</Text>}</View>
+      <View style={styles.card}><Text style={styles.cardTitle}>Cash flow this month</Text><View style={styles.flow}><View style={[styles.flowBar, { height: Math.max(18, Math.min(130, cur.income / Math.max(cur.income, cur.spent, 1) * 130)), backgroundColor: COLORS.green }]} /><View style={[styles.flowBar, { height: Math.max(18, Math.min(130, cur.spent / Math.max(cur.income, cur.spent, 1) * 130)), backgroundColor: COLORS.red }]} /></View><View style={styles.flowLabels}><Text style={styles.emptyText}>Received {money(cur.income)}</Text><Text style={styles.emptyText}>Transferred {money(cur.spent)}</Text></View></View>
+      <View style={styles.card}><Text style={styles.cardTitle}>Top categories</Text>{data.length ? data.map((x) => <Bar key={x.category} category={x.category} amount={x.amount} max={max} />) : <Text style={styles.emptyText}>Not enough data for trends yet.</Text>}</View>
+    </ScrollView>
   </>;
 }

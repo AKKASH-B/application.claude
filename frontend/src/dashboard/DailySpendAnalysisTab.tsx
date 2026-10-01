@@ -2,21 +2,25 @@ import React, { useMemo, useState } from 'react';
 import { View, Text, Pressable, ScrollView, StyleSheet } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import type { Transaction } from './types';
-import { COLORS, money, monthLabel } from './constants';
+import { COLORS, money, monthLabel, shiftMonth } from './constants';
 import { getDailySpends, getWeeklySpends } from './DailySpendAnalysis';
 import { DailySpendDetailModal, type DailySpend, type WeeklySpend } from './DailySpendAnalysis';
+import { styles } from './styles';
 
 interface DailySpendTabProps {
   transactions: Transaction[];
+  month: string;
 }
 
 const WEEKDAY_SHORT = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
-export const DailySpendAnalysisTab: React.FC<DailySpendTabProps> = ({ transactions }) => {
+export const DailySpendAnalysisTab: React.FC<DailySpendTabProps> = ({ transactions, month }) => {
   const [selectedDailySpend, setSelectedDailySpend] = useState<DailySpend | null>(null);
+  const [selectedMonth, setSelectedMonth] = useState(month);
   const [mode, setMode] = useState<'daily' | 'weekly'>('daily');
-  const dailySpends = useMemo(() => getDailySpends(transactions), [transactions]);
-  const weeklySpends = useMemo(() => getWeeklySpends(transactions), [transactions]);
+  const monthTransactions = transactions.filter(t => t.date.startsWith(selectedMonth));
+  const dailySpends = useMemo(() => getDailySpends(monthTransactions), [monthTransactions]);
+  const weeklySpends = useMemo(() => getWeeklySpends(monthTransactions), [monthTransactions]);
 
   if (dailySpends.length === 0) {
     return (
@@ -32,6 +36,16 @@ export const DailySpendAnalysisTab: React.FC<DailySpendTabProps> = ({ transactio
 
   return (
     <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
+      <View style={styles.monthSelector}>
+        <Pressable onPress={() => setSelectedMonth(shiftMonth(selectedMonth, -1))} style={styles.monthBtn}>
+          <Feather name="chevron-left" size={20} color={COLORS.green} />
+        </Pressable>
+        <Text style={styles.monthDisplay}>{monthLabel(selectedMonth)}</Text>
+        <Pressable onPress={() => setSelectedMonth(shiftMonth(selectedMonth, 1))} style={styles.monthBtn} disabled={shiftMonth(selectedMonth, 1) > month}>
+          <Feather name="chevron-right" size={20} color={shiftMonth(selectedMonth, 1) > month ? COLORS.muted : COLORS.green} />
+        </Pressable>
+      </View>
+
       <View style={styles.header}>
         <Text style={styles.title}>{mode === 'daily' ? 'Daily Spending Analysis' : 'Weekly Spending Analysis'}</Text>
         <Text style={styles.subtitle}>{mode === 'daily' ? 'View your spending by day' : 'Monday to Sunday breakdown'}</Text>
