@@ -5,7 +5,6 @@ import type { Transaction } from './types';
 import { COLORS, money, monthLabel, shiftMonth } from './constants';
 import { getDailySpends, getWeeklySpends } from './DailySpendAnalysis';
 import { DailySpendDetailModal, type DailySpend, type WeeklySpend } from './DailySpendAnalysis';
-import { styles } from './styles';
 
 interface DailySpendTabProps {
   transactions: Transaction[];
