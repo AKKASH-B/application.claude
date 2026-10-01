@@ -252,7 +252,7 @@ export default function SplitEditor() {
           </View>
 
           <View style={s.card}>
-            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
               <View>
                 <Text style={s.sectionTitle}>Members</Text>
                 <Text style={s.sectionSub}>{members.length}/10 · Tap avatar to mark payer</Text>
@@ -262,9 +262,21 @@ export default function SplitEditor() {
                   testID="add-member-btn"
                   onPress={() => setAddSheetOpen(true)}
                   disabled={members.length >= 10}
-                  style={[s.iconBtn, members.length >= 10 && { opacity: 0.4 }]}
+                  style={[
+                    {
+                      flexDirection: "row",
+                      alignItems: "center",
+                      gap: 6,
+                      paddingHorizontal: 14,
+                      paddingVertical: 8,
+                      backgroundColor: COLORS.green,
+                      borderRadius: 6,
+                    },
+                    members.length >= 10 && { opacity: 0.4 },
+                  ]}
                 >
-                  <Feather name="user-plus" size={18} color="#FFF" />
+                  <Feather name="user-plus" size={16} color="#FFF" />
+                  <Text style={{ color: "#FFF", fontSize: 13, fontWeight: "600" }}>Add</Text>
                 </Pressable>
               )}
             </View>

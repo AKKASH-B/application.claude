@@ -74,7 +74,7 @@ export default function AddMemberSheet({ visible, existingNames, onClose, onAdd 
   useEffect(() => {
     if (visible) {
       setName(""); setPhone(""); setError(""); setSearch("");
-      setTab("contacts");
+      setTab(perm === "granted" ? "contacts" : "contacts"); // Always try contacts first
       loadFriends();
       checkPermission();
     }
@@ -135,16 +135,16 @@ export default function AddMemberSheet({ visible, existingNames, onClose, onAdd 
           <Text style={s.emptyText}>Contact import works in the mobile app (Expo Go / installed build). On web, use “New” to add a member manually.</Text>
         ) : perm === "blocked" ? (
           <>
-            <Text style={s.emptyText}>Contacts access is off. Turn it on in Settings to pick people from your phonebook.</Text>
+            <Text style={s.emptyText}>📱 Contacts access is off. Turn it on in Settings to pick people from your phonebook.</Text>
             <Pressable testID="open-settings-contacts" onPress={() => Linking.openSettings()} style={[s.cta, { paddingHorizontal: 20, paddingVertical: 12 }]}>
               <Feather name="settings" size={16} color="#FFF" /><Text style={s.ctaText}>Open Settings</Text>
             </Pressable>
           </>
         ) : (
           <>
-            <Text style={s.emptyText}>Import friends straight from your phone contacts to split bills faster.</Text>
+            <Text style={s.emptyText}>🤝 Pick friends straight from your phone contacts — no need to type names!</Text>
             <Pressable testID="allow-contacts" onPress={requestPermission} style={[s.cta, { paddingHorizontal: 20, paddingVertical: 12 }]}>
-              <Feather name="user-plus" size={16} color="#FFF" /><Text style={s.ctaText}>Import from contacts</Text>
+              <Feather name="user-plus" size={16} color="#FFF" /><Text style={s.ctaText}>Allow Contact Access</Text>
             </Pressable>
           </>
         )}
@@ -165,7 +165,9 @@ export default function AddMemberSheet({ visible, existingNames, onClose, onAdd 
           <View style={s.modeRow}>
             {(["contacts", "manual", "friends"] as const).map((t) => (
               <Pressable key={t} testID={`add-member-tab-${t}`} onPress={() => { setTab(t); setError(""); setSearch(""); }} style={[s.modePill, tab === t && s.modePillActive]}>
-                <Text style={[s.modePillText, tab === t && s.modePillTextActive]}>{t === "contacts" ? "Contacts" : t === "manual" ? "New" : "Friends"}</Text>
+                <Text style={[s.modePillText, tab === t && s.modePillTextActive]}>
+                  {t === "contacts" ? "📱 Contacts" : t === "manual" ? "✏️ New" : "👥 Friends"}
+                </Text>
               </Pressable>
             ))}
           </View>
