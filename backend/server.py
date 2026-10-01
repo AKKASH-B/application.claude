@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, Depends, HTTPException, status
+from fastapi import FastAPI, APIRouter, Depends, HTTPException, status, Request
 from fastapi.responses import PlainTextResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -14,6 +14,8 @@ from pathlib import Path
 from pydantic import BaseModel, Field, field_validator
 from typing import Any, List, Literal, Optional
 import uuid
+import secrets
+import string
 from datetime import datetime, timezone, timedelta
 
 
@@ -211,6 +213,26 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     expires_in: int
+
+
+class SignupResponse(TokenResponse):
+    backup_code: str
+
+
+class ResetPinInput(BaseModel):
+    username: str = Field(min_length=3, max_length=30)
+    backup_code: str = Field(min_length=16, max_length=16)
+    new_pin: str = Field(min_length=6, max_length=6)
+
+    @field_validator("username")
+    @classmethod
+    def lower_username(cls, value: str) -> str:
+        return value.strip().lower()
+
+    @field_validator("new_pin")
+    @classmethod
+    def validate_pin_field(cls, value: str) -> str:
+        return validate_pin(value)
 
 
 class TransactionCreate(BaseModel):
@@ -447,10 +469,10 @@ def _apply_members(members: List[SplitMemberInput]) -> List[dict]:
     return out
 
 
-def create_token(user_id: str) -> str:
+def create_token(user_id: str, token_version: int = 0) -> str:
     now = datetime.now(timezone.utc)
     return jwt.encode(
-        {"sub": user_id, "jti": str(uuid.uuid4()), "iat": now, "exp": now + timedelta(minutes=TOKEN_MINUTES)},
+        {"sub": user_id, "jti": str(uuid.uuid4()), "iat": now, "exp": now + timedelta(minutes=TOKEN_MINUTES), "tv": token_version},
         JWT_SECRET,
         algorithm=JWT_ALGORITHM,
     )
@@ -506,8 +528,21 @@ def _to_user_response(doc: dict[str, Any]) -> UserResponse:
     )
 
 
-async def _login_lockout_remaining_seconds(username: str) -> int:
-    doc = await db.login_attempts.find_one({"username": username}, {"_id": 0})
+def _get_client_ip(request: Request) -> str:
+    """Extract the client IP from the request, accounting for proxies."""
+    if request.client:
+        return request.client.host
+    return "unknown"
+
+
+def _generate_backup_code() -> str:
+    """Generate a 16-character alphanumeric backup code for PIN recovery."""
+    chars = string.ascii_uppercase + string.digits
+    return ''.join(secrets.choice(chars) for _ in range(16))
+
+
+async def _login_lockout_remaining_seconds(username: str, ip: str) -> int:
+    doc = await db.login_attempts.find_one({"username": username, "ip": ip}, {"_id": 0})
     if not doc or not doc.get("locked_until"):
         return 0
     locked_until = datetime.fromisoformat(doc["locked_until"])
@@ -515,10 +550,10 @@ async def _login_lockout_remaining_seconds(username: str) -> int:
     return max(0, int(remaining))
 
 
-async def _record_login_failure(username: str) -> None:
+async def _record_login_failure(username: str, ip: str) -> None:
     now = datetime.now(timezone.utc)
     window_start = now - timedelta(minutes=LOGIN_ATTEMPT_WINDOW_MINUTES)
-    doc = await db.login_attempts.find_one({"username": username}, {"_id": 0})
+    doc = await db.login_attempts.find_one({"username": username, "ip": ip}, {"_id": 0})
     if doc and doc.get("first_attempt_at"):
         first_attempt = datetime.fromisoformat(doc["first_attempt_at"])
         if first_attempt < window_start:
@@ -526,6 +561,7 @@ async def _record_login_failure(username: str) -> None:
     count = (doc.get("count", 0) if doc else 0) + 1
     update: dict[str, Any] = {
         "username": username,
+        "ip": ip,
         "count": count,
         "first_attempt_at": doc.get("first_attempt_at") if doc else now.isoformat(),
         "last_attempt_at": now.isoformat(),
@@ -533,11 +569,11 @@ async def _record_login_failure(username: str) -> None:
     if count >= LOGIN_MAX_ATTEMPTS:
         update["locked_until"] = (now + timedelta(minutes=LOGIN_LOCKOUT_MINUTES)).isoformat()
         update["count"] = 0
-    await db.login_attempts.update_one({"username": username}, {"$set": update}, upsert=True)
+    await db.login_attempts.update_one({"username": username, "ip": ip}, {"$set": update}, upsert=True)
 
 
-async def _clear_login_failures(username: str) -> None:
-    await db.login_attempts.delete_one({"username": username})
+async def _clear_login_failures(username: str, ip: str) -> None:
+    await db.login_attempts.delete_one({"username": username, "ip": ip})
 
 
 async def _ensure_role(doc: dict[str, Any]) -> dict[str, Any]:
@@ -565,11 +601,16 @@ async def current_user(credentials: HTTPAuthorizationCredentials | None = Depend
             raise ValueError("missing user")
     except (jwt.InvalidTokenError, ValueError):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
-    user = await db.users.find_one({"id": user_id}, {"_id": 0, "id": 1, "username": 1, "phone": 1, "role": 1, "disabled": 1})
+    user = await db.users.find_one({"id": user_id}, {"_id": 0, "id": 1, "username": 1, "phone": 1, "role": 1, "disabled": 1, "token_version": 1})
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User no longer exists")
     if await db.revoked_tokens.find_one({"token": credentials.credentials}, {"_id": 0}):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session ended")
+    # Verify token version matches (PIN change invalidates old tokens)
+    token_version = payload.get("tv", 0)
+    user_version = user.get("token_version", 0)
+    if token_version != user_version:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired — please log in again")
     await _ensure_role(user)
     if user.get("disabled"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This account has been disabled")
@@ -588,28 +629,33 @@ async def root():
     return {"message": "Hello World"}
 
 
-@api_router.post("/auth/signup", response_model=TokenResponse, status_code=201)
+@api_router.post("/auth/signup", response_model=SignupResponse, status_code=201)
 async def signup(input: SignupInput):
     if await db.users.find_one({"username": input.username}, {"_id": 0}):
         raise HTTPException(status_code=409, detail="Username already taken. Please choose another username.")
     user_id = str(uuid.uuid4())
     role = await _claim_admin_role(user_id, input.username, input.phone)
+    backup_code = _generate_backup_code()
+    backup_code_hash = bcrypt.hashpw(backup_code.encode(), bcrypt.gensalt()).decode()
     user = {
         "id": user_id,
         "username": input.username,
         "phone": input.phone,
         "pin_hash": bcrypt.hashpw(input.pin.encode(), bcrypt.gensalt()).decode(),
+        "backup_code_hash": backup_code_hash,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "role": role,
         "disabled": False,
+        "token_version": 0,
     }
     await db.users.insert_one(user)
-    return TokenResponse(access_token=create_token(user["id"]), expires_in=TOKEN_MINUTES * 60)
+    return SignupResponse(access_token=create_token(user["id"], 0), expires_in=TOKEN_MINUTES * 60, backup_code=backup_code)
 
 
 @api_router.post("/auth/login", response_model=TokenResponse)
-async def login(input: LoginInput):
-    locked_seconds = await _login_lockout_remaining_seconds(input.username)
+async def login(input: LoginInput, request: Request):
+    client_ip = _get_client_ip(request)
+    locked_seconds = await _login_lockout_remaining_seconds(input.username, client_ip)
     if locked_seconds > 0:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -618,13 +664,13 @@ async def login(input: LoginInput):
     user = await db.users.find_one({"username": input.username}, {"_id": 0})
     valid = user and bcrypt.checkpw(input.pin.encode(), user["pin_hash"].encode())
     if not valid:
-        await _record_login_failure(input.username)
+        await _record_login_failure(input.username, client_ip)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect username or PIN")
-    await _clear_login_failures(input.username)
+    await _clear_login_failures(input.username, client_ip)
     await _ensure_role(user)
     if user.get("disabled"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This account has been disabled")
-    return TokenResponse(access_token=create_token(user["id"]), expires_in=TOKEN_MINUTES * 60)
+    return TokenResponse(access_token=create_token(user["id"], user.get("token_version", 0)), expires_in=TOKEN_MINUTES * 60)
 
 
 @api_router.get("/me", response_model=UserResponse)
@@ -647,12 +693,32 @@ async def logout(credentials: HTTPAuthorizationCredentials | None = Depends(bear
 async def change_pin(input: ChangePinInput, user: dict[str, Any] = Depends(current_user)):
     if input.current_pin == input.new_pin:
         raise HTTPException(status_code=400, detail="New PIN must be different from the current one")
-    stored = await db.users.find_one({"id": user["id"]}, {"_id": 0, "pin_hash": 1})
+    stored = await db.users.find_one({"id": user["id"]}, {"_id": 0, "pin_hash": 1, "token_version": 1})
     if not stored or not bcrypt.checkpw(input.current_pin.encode(), stored["pin_hash"].encode()):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Current PIN is incorrect")
     new_hash = bcrypt.hashpw(input.new_pin.encode(), bcrypt.gensalt()).decode()
-    await db.users.update_one({"id": user["id"]}, {"$set": {"pin_hash": new_hash}})
+    new_version = (stored.get("token_version", 0) or 0) + 1
+    await db.users.update_one({"id": user["id"]}, {"$set": {"pin_hash": new_hash, "token_version": new_version}})
     return {"ok": True}
+
+
+@api_router.post("/auth/reset-pin")
+async def reset_pin(input: ResetPinInput):
+    """Reset PIN using username + backup code (for forgotten PINs)."""
+    user = await db.users.find_one({"username": input.username}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Username not found")
+    # Verify backup code
+    backup_hash = user.get("backup_code_hash")
+    if not backup_hash or not bcrypt.checkpw(input.backup_code.encode(), backup_hash.encode()):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid backup code")
+    if input.new_pin == user.get("pin") or (await db.users.find_one({"username": input.username}, {"_id": 0, "pin_hash": 1}) and bcrypt.checkpw(input.new_pin.encode(), user["pin_hash"].encode())):
+        raise HTTPException(status_code=400, detail="New PIN must be different from the current one")
+    # Reset PIN and increment token_version to invalidate all sessions
+    new_hash = bcrypt.hashpw(input.new_pin.encode(), bcrypt.gensalt()).decode()
+    new_version = (user.get("token_version", 0) or 0) + 1
+    await db.users.update_one({"username": input.username}, {"$set": {"pin_hash": new_hash, "token_version": new_version}})
+    return {"ok": True, "message": "PIN reset successfully. Please log in with your new PIN."}
 
 
 @api_router.post("/status", response_model=StatusCheck)
