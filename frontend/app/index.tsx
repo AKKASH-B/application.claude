@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, Pressable, SafeAreaView, ScrollView, Share, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { router } from "expo-router";
 import { Feather, MaterialCommunityIcons } from "@expo/vector-icons";
-import ImportSheet from "@/src/import/ImportSheet";
 import Calendar, { prettyDate, todayIso } from "@/src/components/Calendar";
 import Calculator from "@/src/components/Calculator";
 import { authorizedRequest, restoreSession, signOut, User } from "@/src/auth";
@@ -38,7 +37,6 @@ function Dashboard({ user, onSignedOut }: { user: User; onSignedOut: () => void 
   const [tab, setTab] = useState("Overview");
   const [month, setMonth] = useState(nowMonth());
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [importOpen, setImportOpen] = useState(false);
   const [changePwOpen, setChangePwOpen] = useState(false);
   const [adminOpen, setAdminOpen] = useState(false);
   const [editorOpen, setEditorOpen] = useState(false);
@@ -196,7 +194,7 @@ function Dashboard({ user, onSignedOut }: { user: User; onSignedOut: () => void 
   }, [savingsGoals, savedByGoal, celebrateGoal, markCelebrated]);
 
   return <SafeAreaView style={styles.safe}><ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-    <View style={styles.top}><View style={{ flex: 1 }}><Text style={styles.eyebrow}>PERSONAL FINANCE</Text><Text style={styles.title}>Hi {user.username}</Text><View style={styles.profileMetaRow}><Text style={styles.sectionSub} numberOfLines={1}>{user.phone}</Text></View></View><View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}><Pressable testID="open-import" onPress={() => setImportOpen(true)} style={styles.importBtn}><Feather name="message-square" size={16} color={COLORS.green} /><Text style={styles.importBtnText}>SMS</Text></Pressable><Pressable testID="open-settings" onPress={() => setSettingsOpen(true)} style={styles.avatar}><Text style={styles.avatarText}>{user.username.slice(0, 2).toUpperCase()}</Text></Pressable></View></View>
+    <View style={styles.top}><View style={{ flex: 1 }}><Text style={styles.eyebrow}>PERSONAL FINANCE</Text><Text style={styles.title}>Hi {user.username}</Text><View style={styles.profileMetaRow}><Text style={styles.sectionSub} numberOfLines={1}>{user.phone}</Text></View></View><View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}><Pressable testID="open-settings" onPress={() => setSettingsOpen(true)} style={styles.avatar}><Text style={styles.avatarText}>{user.username.slice(0, 2).toUpperCase()}</Text></Pressable></View></View>
     <View style={styles.hero}><View style={styles.heroTop}><Text style={styles.heroLabel}>TOTAL BALANCE</Text><Feather name="more-horizontal" size={20} color="#B5C8BE" /></View><Text testID="total-balance" style={[styles.balance, balance < 0 && styles.balanceNeg]}>{balance < 0 ? "-" : ""}{money(balance)}</Text><View style={styles.delta}><Feather name="trending-up" size={13} color="#D7E8DE" /><Text style={styles.deltaText}>On track this month</Text></View><View style={styles.heroBottom}><Text style={styles.heroSmall}>Updated just now</Text><Text style={styles.heroSmall}>{transactions.length} transactions</Text></View></View>
     {overBudget.length > 0 && <View testID="budget-alert-banner" style={styles.alertBanner}><Feather name="alert-triangle" size={16} color={COLORS.red} /><Text style={styles.alertText}>Over budget on {overBudget.map((x) => x.category).join(", ")}</Text></View>}
     {balance < 0 && <View testID="low-balance-alert" style={styles.lowBalanceCard}><View style={styles.lowBalanceIcon}><Feather name="trending-down" size={18} color={COLORS.red} /></View><View style={{ flex: 1 }}><Text style={styles.lowBalanceTitle}>Balance is in the red</Text><Text style={styles.lowBalanceSub}>You've transferred {money(balance)} more than you've received. Ease up or add income to get back on track.</Text></View></View>}
@@ -265,15 +263,5 @@ function Dashboard({ user, onSignedOut }: { user: User; onSignedOut: () => void 
     <SettingsSheet visible={settingsOpen} month={month} monthTransactions={current} isAdmin={user.role === "admin"} onClose={() => setSettingsOpen(false)} onChangePassword={() => { setSettingsOpen(false); setChangePwOpen(true); }} onOpenAdmin={() => { setSettingsOpen(false); setAdminOpen(true); }} onSignedOut={() => { setSettingsOpen(false); signOut().then(onSignedOut); }} />
     <ChangePasswordSheet visible={changePwOpen} onClose={() => setChangePwOpen(false)} />
     <AdminSheet visible={adminOpen} onClose={() => setAdminOpen(false)} />
-    <ImportSheet
-      visible={importOpen}
-      onClose={() => setImportOpen(false)}
-      onSaved={(createdList) => { setTransactions((x) => [...createdList, ...x]); }}
-      onEditPrefilled={(draft) => {
-        setEditing(null);
-        setForm({ amount: String(draft.amount), category: draft.category, note: draft.note, type: draft.type, goalId: null, date: todayIso() });
-        setEditorOpen(true);
-      }}
-    />
   </SafeAreaView>;
 }
