@@ -797,19 +797,6 @@ async def reset_pin(input: ResetPinInput):
     return {"ok": True, "message": "PIN reset successfully. Please log in with your new PIN."}
 
 
-@api_router.post("/status", response_model=StatusCheck)
-async def create_status_check(input: StatusCheckCreate):
-    status_dict = input.dict()
-    status_obj = StatusCheck(**status_dict)
-    _ = await db.status_checks.insert_one(status_obj.dict())
-    return status_obj
-
-@api_router.get("/status", response_model=List[StatusCheck])
-async def get_status_checks():
-    status_checks = await db.status_checks.find({}, {"_id": 0}).to_list(1000)
-    return [StatusCheck(**status_check) for status_check in status_checks]
-
-
 @api_router.get("/transactions", response_model=List[Transaction])
 async def get_transactions(user: dict[str, Any] = Depends(current_user)):
     docs = await db.transactions.find({"owner_id": user["id"]}, {"_id": 0, "owner_id": 0}).sort("date", -1).to_list(2000)
@@ -1173,6 +1160,8 @@ async def update_split(split_id: str, input: SplitSessionUpdate, user: dict[str,
     existing = await db.splits.find_one({"id": split_id, "owner_id": user["id"]}, {"_id": 0})
     if not existing:
         raise HTTPException(status_code=404, detail="Split not found")
+    if existing.get("finalized"):
+        raise HTTPException(status_code=400, detail="Cannot edit a finalized split")
 
     new_total = input.total_amount if input.total_amount is not None else existing["total_amount"]
     new_mode = input.mode if input.mode is not None else existing["mode"]
@@ -1222,6 +1211,8 @@ async def toggle_split_member_settled(split_id: str, member_id: str, input: Spli
     existing = await db.splits.find_one({"id": split_id, "owner_id": user["id"]}, {"_id": 0})
     if not existing:
         raise HTTPException(status_code=404, detail="Split not found")
+    if existing.get("finalized") and not input.settled:
+        raise HTTPException(status_code=400, detail="Cannot unsettle members in a finalized split")
     members = existing["members"]
     hit = False
     for m in members:

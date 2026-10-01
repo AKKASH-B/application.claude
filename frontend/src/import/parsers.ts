@@ -14,6 +14,9 @@ const _unusedAmountRe = AMOUNT_RE_UNUSED_KEPT_FOR_DOCS;
 const DIR_EXPENSE_RE = /\b(paid|sent|debited|payment successful|you paid|amount paid|money sent|purchase(?:d)?|spent|withdrawn|withdrew)\b/i;
 const DIR_INCOME_RE = /\b(received|credited|refund(?:ed)?|money received|has been credited|deposited)\b/i;
 const BALANCE_HINT_RE = /\b(bal(?:ance)?|avl\s*bal|available)\b/i;
+// Block OTP, verification, authorization, pre-auth messages — these are NOT transactions
+const BLOCK_OTP_RE = /\b(otp|verification|one-time password|confirm|pre-auth|authorization|security|validate|confirm identity|card not present|cvv|unconfirmed|pending|approval)\b/i;
+const BLOCK_PROMO_RE = /\b(cashback|reward|bonus|offer|discount|promo|coupon|voucher|limited|flash sale|congratulations|won|lottery|claim|refund pending)\b/i;
 
 // Bank/wallet SMS sender codes documentation-only reference (used inline in parseSmsBundle)
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -108,6 +111,11 @@ export function parseReceipt(text: string): ParsedReceipt | null {
   if (!text || text.trim().length < 6) return null;
   const raw = text.trim();
 
+  // BLOCK OTP/pre-auth/promo messages upfront — these are NOT transactions
+  if (BLOCK_OTP_RE.test(raw) || BLOCK_PROMO_RE.test(raw)) {
+    return null;
+  }
+
   // Extract amount — prefer the amount NOT associated with "Bal / Avl Bal / Available Balance".
   // Strategy: collect all amount matches, then pick the first one that isn't immediately preceded
   // by a balance keyword within 20 chars.
@@ -123,7 +131,12 @@ export function parseReceipt(text: string): ParsedReceipt | null {
 
   const isIncome = DIR_INCOME_RE.test(raw);
   const isExpense = DIR_EXPENSE_RE.test(raw);
-  // If neither direction word is present, default to expense (most receipts are payments made).
+  // CRITICAL: Require BOTH amount AND a direction keyword. No defaulting to "expense"!
+  // This prevents promo SMS without clear direction keywords from being imported as expenses.
+  if (!isIncome && !isExpense) {
+    // No transaction direction found — reject the SMS
+    return null;
+  }
   const direction: ParsedReceipt["direction"] = isIncome && !isExpense ? "income" : "expense";
 
   // For merchants, try VPA extraction first (highest signal), then structured phrases.

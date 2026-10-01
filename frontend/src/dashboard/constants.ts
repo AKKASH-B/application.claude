@@ -5,7 +5,11 @@ export const TRANSFERRED_CATEGORIES = ["Food", "Transport", "Bills", "Rent", "Sh
 export const RECEIVED_CATEGORIES = ["Salary", "Interest", "Trading", "Other"];
 export const SAVINGS_CATEGORIES = ["Emergency Fund", "Goal", "Investment", "Retirement", "Other"];
 export const categoriesFor = (type: TxType) => (type === "expense" ? TRANSFERRED_CATEGORIES : type === "income" ? RECEIVED_CATEGORIES : SAVINGS_CATEGORIES);
-export const money = (n: number) => `₹${Math.abs(n).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
+export const money = (n: number) => {
+  const sign = n < 0 ? '-' : '';
+  const absFormatted = Math.abs(n).toLocaleString("en-IN", { maximumFractionDigits: 0 });
+  return `${sign}₹${absFormatted}`;
+};
 export const monthLabel = (ym: string) => { const [y, m] = ym.split("-").map(Number); return new Date(y, m - 1, 1).toLocaleDateString("en-IN", { month: "long", year: "numeric" }); };
 export const nowMonth = () => new Date().toISOString().slice(0, 7);
 export const shiftMonth = (ym: string, delta: number) => { const [y, m] = ym.split("-").map(Number); const d = new Date(y, m - 1 + delta, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; };
