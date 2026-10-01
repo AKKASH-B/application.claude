@@ -219,10 +219,24 @@ class SignupResponse(TokenResponse):
     backup_code: str
 
 
+class RequestOtpInput(BaseModel):
+    username: str = Field(min_length=3, max_length=30)
+    phone: str = Field(min_length=8)
+
+    @field_validator("username")
+    @classmethod
+    def lower_username(cls, value: str) -> str:
+        return value.strip().lower()
+
+    @field_validator("phone", mode="before")
+    @classmethod
+    def validate_phone(cls, value: str) -> str:
+        return normalize_phone(value)
+
+
 class ResetPinInput(BaseModel):
     username: str = Field(min_length=3, max_length=30)
-    backup_code: Optional[str] = Field(default=None, min_length=16, max_length=16)
-    phone: Optional[str] = Field(default=None, min_length=8)
+    otp: str = Field(min_length=6, max_length=6)
     new_pin: str = Field(min_length=6, max_length=6)
 
     @field_validator("username")
@@ -230,17 +244,17 @@ class ResetPinInput(BaseModel):
     def lower_username(cls, value: str) -> str:
         return value.strip().lower()
 
+    @field_validator("otp", "new_pin")
+    @classmethod
+    def validate_numeric(cls, value: str) -> str:
+        if not value.isdigit():
+            raise ValueError("must contain only digits")
+        return value
+
     @field_validator("new_pin")
     @classmethod
     def validate_pin_field(cls, value: str) -> str:
         return validate_pin(value)
-
-    @field_validator("phone", mode="before")
-    @classmethod
-    def validate_phone(cls, value: Optional[str]) -> Optional[str]:
-        if value is None:
-            return value
-        return normalize_phone(value)
 
 
 class TransactionCreate(BaseModel):
@@ -549,6 +563,36 @@ def _generate_backup_code() -> str:
     return ''.join(secrets.choice(chars) for _ in range(16))
 
 
+def _generate_otp() -> str:
+    """Generate a 6-digit OTP."""
+    return ''.join(secrets.choice(string.digits) for _ in range(6))
+
+
+async def _store_otp(username: str, otp: str) -> None:
+    """Store OTP with 10-minute expiration."""
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+    await db.otp_tokens.update_one(
+        {"username": username},
+        {"$set": {"otp": otp, "expires_at": expires_at.isoformat()}},
+        upsert=True
+    )
+
+
+async def _verify_otp(username: str, otp: str) -> bool:
+    """Verify OTP and delete it if valid."""
+    doc = await db.otp_tokens.find_one({"username": username}, {"_id": 0})
+    if not doc:
+        return False
+    if doc.get("otp") != otp:
+        return False
+    expires_at = datetime.fromisoformat(doc["expires_at"])
+    if datetime.now(timezone.utc) > expires_at:
+        await db.otp_tokens.delete_one({"username": username})
+        return False
+    await db.otp_tokens.delete_one({"username": username})
+    return True
+
+
 async def _login_lockout_remaining_seconds(username: str, ip: str) -> int:
     doc = await db.login_attempts.find_one({"username": username, "ip": ip}, {"_id": 0})
     if not doc or not doc.get("locked_until"):
@@ -710,26 +754,37 @@ async def change_pin(input: ChangePinInput, user: dict[str, Any] = Depends(curre
     return {"ok": True}
 
 
-@api_router.post("/auth/reset-pin")
-async def reset_pin(input: ResetPinInput):
-    """Reset PIN using either backup code OR phone verification (for forgotten PINs)."""
-    # Require at least one recovery method
-    if not input.backup_code and not input.phone:
-        raise HTTPException(status_code=400, detail="Provide either backup code or phone number")
-
+@api_router.post("/auth/request-otp")
+async def request_otp(input: RequestOtpInput):
+    """Request OTP for PIN recovery. OTP is sent via SMS in production."""
     user = await db.users.find_one({"username": input.username}, {"_id": 0})
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Username not found")
 
-    # Verify recovery method (backup code takes priority)
-    if input.backup_code:
-        backup_hash = user.get("backup_code_hash")
-        if not backup_hash or not bcrypt.checkpw(input.backup_code.encode(), backup_hash.encode()):
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid backup code")
-    elif input.phone:
-        user_phone = user.get("phone", "")
-        if not user_phone or input.phone != user_phone:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Phone number does not match account")
+    # Verify phone matches account
+    user_phone = user.get("phone", "")
+    if not user_phone or input.phone != user_phone:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Phone number does not match account")
+
+    # Generate and store OTP
+    otp = _generate_otp()
+    await _store_otp(input.username, otp)
+
+    # In production, send OTP via SMS here
+    # For now, return OTP for testing (remove in production)
+    return {"ok": True, "otp": otp, "message": "OTP sent to your phone. Valid for 10 minutes."}
+
+
+@api_router.post("/auth/reset-pin")
+async def reset_pin(input: ResetPinInput):
+    """Reset PIN using OTP verification (for forgotten PINs)."""
+    user = await db.users.find_one({"username": input.username}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Username not found")
+
+    # Verify OTP
+    if not await _verify_otp(input.username, input.otp):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired OTP")
 
     # Verify new PIN is different from current
     if bcrypt.checkpw(input.new_pin.encode(), user["pin_hash"].encode()):

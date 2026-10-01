@@ -55,10 +55,10 @@ export async function changePin(currentPin: string, newPin: string) {
   });
 }
 
-export async function resetPin(username: string, backupCode: string, newPin: string) {
+export async function resetPin(username: string, newPin: string, backupCode?: string, phone?: string) {
   return request<{ ok: boolean }>("/auth/reset-pin", {
     method: "POST",
-    body: JSON.stringify({ username, backup_code: backupCode, new_pin: newPin }),
+    body: JSON.stringify({ username, new_pin: newPin, ...(backupCode && { backup_code: backupCode }), ...(phone && { phone }) }),
   });
 }
 
