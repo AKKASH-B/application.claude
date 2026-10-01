@@ -16,7 +16,7 @@ const MODES: { key: SplitMode; label: string }[] = [
 ];
 
 export default function SplitEditor() {
-  const { id, amount: presetAmount, note: presetNote } = useLocalSearchParams<{ id: string; amount?: string; note?: string }>();
+  const { id, amount: presetAmount, note: presetNote, transactionId: presetTransactionId } = useLocalSearchParams<{ id: string; amount?: string; note?: string; transactionId?: string }>();
   const isNew = id === "new";
 
   const [loading, setLoading] = useState(!isNew);
@@ -148,7 +148,12 @@ export default function SplitEditor() {
         })),
       };
       if (isNew) {
-        const created = await splitApi.create({ ...payload, create_transaction: true });
+        // When we arrived here from "Split it" on the add-transaction screen, that
+        // transaction was already saved as the user's own expense — link to it
+        // instead of having the backend create a second, duplicate transaction.
+        const created = presetTransactionId
+          ? await splitApi.create({ ...payload, create_transaction: false, transaction_id: String(presetTransactionId) })
+          : await splitApi.create({ ...payload, create_transaction: true });
         // Navigate first so the user always lands on the detail screen even if the notify prompt fails.
         router.replace(`/split/${created.id}` as `/split/${string}`);
         // Fire-and-forget: prompt to send SMS reminders.

@@ -50,6 +50,7 @@ function Dashboard({ user, onSignedOut }: { user: User; onSignedOut: () => void 
   const [celebrateGoal, setCelebrateGoal] = useState<SavingsGoal | null>(null);
   const [splitPrompt, setSplitPrompt] = useState<{ amount: number; note: string } | null>(null);
   const [splitAsked, setSplitAsked] = useState(false);
+  const [splitSaving, setSplitSaving] = useState(false);
   const [form, setForm] = useState({ amount: "", category: "Food", note: "", type: "expense" as TxType, goalId: null as string | null, date: todayIso() });
   const [calcOpen, setCalcOpen] = useState(false);
   const [datePickerOpen, setDatePickerOpen] = useState(false);
@@ -131,6 +132,28 @@ function Dashboard({ user, onSignedOut }: { user: User; onSignedOut: () => void 
         closeEditor();
       }
     } catch { Alert.alert("Couldn't save", "Please try again."); }
+  };
+  const confirmSplit = async () => {
+    if (!splitPrompt) return;
+    const amount = Number(form.amount);
+    if (!amount || amount <= 0) { setSplitPrompt(null); return; }
+    setSplitSaving(true);
+    const payload = { type: "expense" as TxType, amount, category: form.category, note: form.note.trim(), date: form.date || todayIso(), goal_id: null };
+    try {
+      // Save it as the user's own transaction FIRST, so it's never lost even if they
+      // abandon the split screen before finishing it. The split then links to this
+      // transaction (create_transaction: false) instead of creating a duplicate one.
+      const created = await authorizedRequest<Transaction>("/transactions", { method: "POST", body: JSON.stringify(payload) });
+      setTransactions((x) => [created, ...x]);
+      setMonth(created.date.slice(0, 7));
+      setSplitPrompt(null);
+      closeEditor();
+      router.push({ pathname: "/split/new", params: { transactionId: created.id, amount: String(created.amount), note: created.note } });
+    } catch {
+      Alert.alert("Couldn't save", "Please try again.");
+    } finally {
+      setSplitSaving(false);
+    }
   };
   const deleteTransaction = async (t: Transaction) => {
     try {
@@ -227,18 +250,13 @@ function Dashboard({ user, onSignedOut }: { user: User; onSignedOut: () => void 
           <Text style={styles.emptyText}>{splitPrompt ? `Divide ${money(splitPrompt.amount)} between friends and track who owes what.` : ""}</Text>
           <Pressable
             testID="split-prompt-confirm"
-            onPress={() => {
-              if (!splitPrompt) return;
-              const { amount, note } = splitPrompt;
-              setSplitPrompt(null);
-              closeEditor();
-              router.push({ pathname: "/split/new", params: { amount: String(amount), note } });
-            }}
-            style={styles.save}
+            onPress={confirmSplit}
+            disabled={splitSaving}
+            style={[styles.save, splitSaving && { opacity: 0.6 }]}
           >
-            <Text style={styles.saveText}>Split it</Text>
+            {splitSaving ? <ActivityIndicator color="#FFF" /> : <Text style={styles.saveText}>Split it</Text>}
           </Pressable>
-          <Pressable testID="split-prompt-dismiss" onPress={() => setSplitPrompt(null)} style={styles.remove}>
+          <Pressable testID="split-prompt-dismiss" onPress={() => setSplitPrompt(null)} disabled={splitSaving} style={styles.remove}>
             <Text style={authStyles.linkText}>Not now</Text>
           </Pressable>
         </Pressable>
