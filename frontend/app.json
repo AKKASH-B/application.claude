@@ -22,7 +22,10 @@
       },
       "edgeToEdgeEnabled": true,
       "package": "com.akkash.spendpulse",
-      "permissions": ["android.permission.READ_CONTACTS"]
+      "permissions": [
+        "android.permission.READ_CONTACTS",
+        "android.permission.WRITE_CONTACTS"
+      ]
     },
     "web": {
       "bundler": "metro",
@@ -33,7 +36,9 @@
       "expo-router",
       [
         "expo-contacts",
-        { "contactsPermission": "Import friends to add them to your split expenses" }
+        {
+          "contactsPermission": "Import friends to add them to your split expenses"
+        }
       ],
       [
         "expo-splash-screen",
@@ -47,6 +52,13 @@
     ],
     "experiments": {
       "typedRoutes": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "dd68125d-2c55-4ab3-a50a-45c9f6af031b"
+      }
+    },
+    "owner": "akkashb"
   }
 }
