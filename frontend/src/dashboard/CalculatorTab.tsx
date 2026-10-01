@@ -2,80 +2,20 @@ import React, { useState } from 'react';
 import { View, Text, Pressable, ScrollView, StyleSheet } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { COLORS, money } from './constants';
+import { CALC_KEYS, CALC_OPS, round2, useCalculator } from '../utils/calculator';
 
-type Op = '+' | '-' | '×' | '÷';
 type Entry = { expression: string; result: number };
 
-const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
-// Division by zero yields NaN, which the UI shows as "Can't divide by 0".
-const applyOp = (a: number, b: number, o: Op) => (o === '+' ? a + b : o === '-' ? a - b : o === '×' ? a * b : b === 0 ? NaN : a / b);
-
 export const CalculatorTab: React.FC = () => {
-  const [current, setCurrent] = useState('0');
-  const [prev, setPrev] = useState<number | null>(null);
-  const [op, setOp] = useState<Op | null>(null);
-  const [overwrite, setOverwrite] = useState(true);
+  const calc = useCalculator();
   const [history, setHistory] = useState<Entry[]>([]);
-
-  const inputDigit = (d: string) => {
-    if (overwrite) {
-      setOverwrite(false);
-      setCurrent(d === '.' ? '0.' : d);
-      return;
-    }
-    if (d === '.' && current.includes('.')) return;
-    if (current.replace('.', '').length >= 12) return;
-    setCurrent(current === '0' && d !== '.' ? d : current + d);
-  };
-
-  const chooseOp = (o: Op) => {
-    const cur = Number(current);
-    if (Number.isNaN(cur)) return; // showing an error message — ignore operators until a digit is entered
-    if (prev !== null && op && !overwrite) {
-      const result = round2(applyOp(prev, cur, op));
-      if (!Number.isFinite(result)) { setCurrent("Can't divide by 0"); setPrev(null); setOp(null); setOverwrite(true); return; }
-      setPrev(result);
-      setCurrent(String(result));
-    } else {
-      setPrev(cur);
-    }
-    setOp(o);
-    setOverwrite(true);
-  };
-
-  const equals = () => {
-    if (prev === null || !op) return;
-    const b = Number(current);
-    if (Number.isNaN(b)) return;
-    const result = round2(applyOp(prev, b, op));
-    if (!Number.isFinite(result)) { setCurrent("Can't divide by 0"); setPrev(null); setOp(null); setOverwrite(true); return; }
-    setHistory((h) => [{ expression: `${prev} ${op} ${b}`, result }, ...h].slice(0, 20));
-    setCurrent(String(result));
-    setPrev(null);
-    setOp(null);
-    setOverwrite(true);
-  };
-
-  const clearAll = () => { setCurrent('0'); setPrev(null); setOp(null); setOverwrite(true); };
-  const backspace = () => { if (overwrite) return; setCurrent(current.length <= 1 ? '0' : current.slice(0, -1)); };
   const clearHistory = () => setHistory([]);
 
   const press = (k: string) => {
-    if (k === 'C') return clearAll();
-    if (k === '⌫') return backspace();
-    if (k === '=') return equals();
-    if (k === '+' || k === '-' || k === '×' || k === '÷') return chooseOp(k as Op);
-    return inputDigit(k);
+    const entry = calc.press(k);
+    if (entry) setHistory((h) => [entry, ...h].slice(0, 20));
   };
 
-  const keys: string[][] = [
-    ['C', '÷', '×', '⌫'],
-    ['7', '8', '9', '-'],
-    ['4', '5', '6', '+'],
-    ['1', '2', '3', '='],
-    ['0', '.'],
-  ];
-  const expression = prev !== null && op ? `${prev} ${op}` : '';
   const historyTotal = round2(history.reduce((s, e) => s + e.result, 0));
 
   return (
@@ -86,15 +26,15 @@ export const CalculatorTab: React.FC = () => {
       </View>
 
       <View style={styles.display}>
-        <Text style={styles.expr}>{expression}</Text>
-        <Text testID="calc-tab-display" style={styles.value} numberOfLines={1} adjustsFontSizeToFit>{current}</Text>
+        <Text style={styles.expr}>{calc.expression}</Text>
+        <Text testID="calc-tab-display" style={styles.value} numberOfLines={1} adjustsFontSizeToFit>{calc.current}</Text>
       </View>
 
       <View style={styles.pad}>
-        {keys.map((row, ri) => (
+        {CALC_KEYS.map((row, ri) => (
           <View key={ri} style={styles.row}>
             {row.map((k) => {
-              const isOp = ['÷', '×', '-', '+'].includes(k);
+              const isOp = CALC_OPS.includes(k);
               const isEq = k === '=';
               const isFn = k === 'C' || k === '⌫';
               const wide = k === '0';

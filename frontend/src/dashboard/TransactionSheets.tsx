@@ -59,6 +59,7 @@ export function BudgetSheet({ category, currentLimit, onClose, onSave, onRemove 
     if (!category) return;
     const n = Number(value);
     if (!n || n <= 0) return Alert.alert("Enter a limit", "Set a monthly limit greater than zero.");
+    if (n > 1_000_000_000) return Alert.alert("Limit too large", "Enter a limit up to ₹100 crore (1,000,000,000).");
     onSave(category, n);
   };
   return (
@@ -71,7 +72,7 @@ export function BudgetSheet({ category, currentLimit, onClose, onSave, onRemove 
           </View>
           <Text style={styles.emptyText}>Set a monthly limit for {category}. We’ll alert you when spending is close.</Text>
           <Text style={styles.inputLabel}>MONTHLY LIMIT</Text>
-          <TextInput testID="budget-amount" value={value} onChangeText={setValue} keyboardType="decimal-pad" placeholder="₹ 0" placeholderTextColor="#A9AAA5" style={styles.input} />
+          <TextInput testID="budget-amount" maxLength={13} value={value} onChangeText={setValue} keyboardType="decimal-pad" placeholder="₹ 0" placeholderTextColor="#A9AAA5" style={styles.input} />
           <Pressable testID="save-budget" onPress={submit} style={styles.save}><Text style={styles.saveText}>Save budget</Text></Pressable>
           {currentLimit ? <Pressable testID="remove-budget" onPress={() => category && onRemove(category)} style={styles.remove}><Text style={styles.removeText}>Remove budget</Text></Pressable> : null}
         </View>
@@ -96,6 +97,7 @@ export function SavingsGoalSheet({ visible, goal, saved, onClose, onSave, onRemo
     if (!trimmed) return Alert.alert("Name your goal", "Give this goal a short name, e.g. Emergency Fund.");
     const n = Number(value);
     if (!n || n <= 0) return Alert.alert("Enter a target", "Set a savings target greater than zero.");
+    if (n > 1_000_000_000) return Alert.alert("Target too large", "Enter a target up to ₹100 crore (1,000,000,000).");
     onSave({ name: trimmed, target: n, target_date: preset ? addMonthsIso(preset) : null });
   };
   return (
@@ -108,9 +110,9 @@ export function SavingsGoalSheet({ visible, goal, saved, onClose, onSave, onRemo
           </View>
           {goal ? <Text style={styles.emptyText}>You’ve set aside {money(saved)} toward this goal.</Text> : <Text style={styles.emptyText}>Name a target, then add a Savings transaction and pick this goal to fund it.</Text>}
           <Text style={styles.inputLabel}>GOAL NAME</Text>
-          <TextInput testID="savings-goal-name" value={name} onChangeText={setName} placeholder="e.g. Emergency Fund" placeholderTextColor="#A9AAA5" style={styles.input} />
+          <TextInput testID="savings-goal-name" maxLength={40} value={name} onChangeText={setName} placeholder="e.g. Emergency Fund" placeholderTextColor="#A9AAA5" style={styles.input} />
           <Text style={styles.inputLabel}>TARGET AMOUNT</Text>
-          <TextInput testID="savings-goal-amount" value={value} onChangeText={setValue} keyboardType="decimal-pad" placeholder="₹ 0" placeholderTextColor="#A9AAA5" style={styles.input} />
+          <TextInput testID="savings-goal-amount" maxLength={13} value={value} onChangeText={setValue} keyboardType="decimal-pad" placeholder="₹ 0" placeholderTextColor="#A9AAA5" style={styles.input} />
           <Text style={styles.inputLabel}>REACH BY</Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
             {GOAL_PRESETS.map((p) => <Pressable testID={`goal-preset-${p.months ?? "none"}`} key={p.label} onPress={() => setPreset(p.months)} style={[styles.chip, preset === p.months && styles.chipActive]}><Text style={[styles.chipText, preset === p.months && styles.chipTextActive]}>{p.label}</Text></Pressable>)}

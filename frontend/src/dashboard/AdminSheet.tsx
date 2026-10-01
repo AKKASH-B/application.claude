@@ -67,7 +67,7 @@ export function AdminSheet({ visible, onClose }: { visible: boolean; onClose: ()
                       <View style={styles.rowBetween}>
                         <View style={{ flex: 1 }}>
                           <Text style={styles.cardTitleTight}>{u.username}{u.role === "admin" ? "  ·  admin" : ""}</Text>
-                          <Text style={styles.transactionSub}>{u.phone}</Text>
+                          <Text style={styles.transactionSub}>{u.email || u.phone || "no email"}</Text>
                         </View>
                         {u.disabled && <View style={styles.goalBadge}><Text style={[styles.goalBadgeText, { color: COLORS.red }]}>Disabled</Text></View>}
                       </View>
@@ -101,7 +101,7 @@ export function AdminSheet({ visible, onClose }: { visible: boolean; onClose: ()
                   <Text style={styles.modalTitle}>Delete user?</Text>
                   <Pressable testID="close-confirm-user" onPress={() => setConfirmUser(null)}><Feather name="x" size={22} color={COLORS.muted} /></Pressable>
                 </View>
-                <Text style={styles.emptyText}>This permanently deletes {confirmUser?.username} ({confirmUser?.phone}) and all of their transactions, budgets, goals and splits. This can’t be undone.</Text>
+                <Text style={styles.emptyText}>This permanently deletes {confirmUser?.username} ({confirmUser?.email || confirmUser?.phone || "no email"}) and all of their transactions, budgets, goals and splits. This can’t be undone.</Text>
                 {deleteError ? <Text style={authStyles.authError}>{deleteError}</Text> : null}
                 <Pressable testID="confirm-delete-user" disabled={busyId === confirmUser?.id} onPress={performDeleteUser} style={[styles.save, { backgroundColor: COLORS.red }, busyId === confirmUser?.id && authStyles.disabled]}>
                   {busyId === confirmUser?.id ? <ActivityIndicator color="#FFF" /> : <Text style={styles.saveText}>Delete user</Text>}
@@ -199,7 +199,7 @@ export function AdminEditTransactionSheet({ t, onClose, onSaved, onDeleted }: { 
           <Text style={styles.inputLabel}>CATEGORY</Text>
           <TextInput testID="admin-tx-category" value={category} onChangeText={setCategory} style={styles.input} />
           <Text style={styles.inputLabel}>NOTE</Text>
-          <TextInput testID="admin-tx-note" value={note} onChangeText={setNote} style={styles.input} />
+          <TextInput testID="admin-tx-note" maxLength={120} value={note} onChangeText={setNote} style={styles.input} />
           <Pressable testID="admin-save-tx" onPress={save} disabled={busy} style={[styles.save, busy && authStyles.disabled]}>
             {busy ? <ActivityIndicator color="#FFF" /> : <Text style={styles.saveText}>Save changes</Text>}
           </Pressable>

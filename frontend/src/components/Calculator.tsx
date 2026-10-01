@@ -1,6 +1,7 @@
 import { Feather } from "@expo/vector-icons";
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
+import { CALC_KEYS, CALC_OPS, useCalculator } from "@/src/utils/calculator";
 
 const COLORS = { ink: "#1C1C1E", muted: "#777773", green: "#4A6B5D", pale: "#E5EBE8", card: "#FFFFFF", line: "#E5E4E0", gold: "#C28E38", red: "#B23B3B", bg: "#F9F8F6" };
 
@@ -11,90 +12,20 @@ type Props = {
   onApply: (value: number, display: string) => void;
 };
 
-type Op = "+" | "-" | "×" | "÷";
-const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
-const applyOp = (a: number, b: number, o: Op) => (o === "+" ? a + b : o === "-" ? a - b : o === "×" ? a * b : b === 0 ? a : a / b);
-
 export default function Calculator({ visible, initial, onClose, onApply }: Props) {
-  const [current, setCurrent] = useState("0");
-  const [prev, setPrev] = useState<number | null>(null);
-  const [op, setOp] = useState<Op | null>(null);
-  const [overwrite, setOverwrite] = useState(true);
+  const calc = useCalculator();
+  const { reset } = calc;
 
   useEffect(() => {
-    if (visible) {
-      setCurrent(initial && Number(initial) > 0 ? String(Number(initial)) : "0");
-      setPrev(null);
-      setOp(null);
-      setOverwrite(true);
-    }
-  }, [visible, initial]);
+    if (visible) reset(initial);
+  }, [visible, initial, reset]);
 
   if (!visible) return null;
 
-  const inputDigit = (d: string) => {
-    if (overwrite) {
-      setOverwrite(false);
-      setCurrent(d === "." ? "0." : d);
-      return;
-    }
-    if (d === "." && current.includes(".")) return;
-    if (current.replace(".", "").length >= 12) return;
-    setCurrent(current === "0" && d !== "." ? d : current + d);
-  };
-
-  const chooseOp = (o: Op) => {
-    const cur = Number(current);
-    if (prev !== null && op && !overwrite) {
-      const result = round2(applyOp(prev, cur, op));
-      setPrev(result);
-      setCurrent(String(result));
-    } else {
-      setPrev(cur);
-    }
-    setOp(o);
-    setOverwrite(true);
-  };
-
-  const equals = () => {
-    if (prev === null || !op) return;
-    const result = round2(applyOp(prev, Number(current), op));
-    setCurrent(String(result));
-    setPrev(null);
-    setOp(null);
-    setOverwrite(true);
-  };
-
-  const clearAll = () => { setCurrent("0"); setPrev(null); setOp(null); setOverwrite(true); };
-  const backspace = () => {
-    if (overwrite) return;
-    setCurrent(current.length <= 1 ? "0" : current.slice(0, -1));
-  };
-
   const done = () => {
-    let value = Number(current);
-    if (prev !== null && op) value = applyOp(prev, Number(current), op);
-    value = round2(value);
-    if (!isFinite(value) || value < 0) value = 0;
+    const value = calc.value();
     onApply(value, String(value));
   };
-
-  const press = (k: string) => {
-    if (k === "C") return clearAll();
-    if (k === "⌫") return backspace();
-    if (k === "=") return equals();
-    if (k === "+" || k === "-" || k === "×" || k === "÷") return chooseOp(k as Op);
-    return inputDigit(k);
-  };
-
-  const keys: string[][] = [
-    ["C", "÷", "×", "⌫"],
-    ["7", "8", "9", "-"],
-    ["4", "5", "6", "+"],
-    ["1", "2", "3", "="],
-    ["0", "."],
-  ];
-  const expression = prev !== null && op ? `${prev} ${op}` : "";
 
   return (
     <View style={styles.overlay} testID="calculator-overlay">
@@ -105,19 +36,19 @@ export default function Calculator({ visible, initial, onClose, onApply }: Props
           <Pressable testID="close-calculator" onPress={onClose} hitSlop={10}><Feather name="x" size={22} color={COLORS.muted} /></Pressable>
         </View>
         <View style={styles.display}>
-          <Text style={styles.expr}>{expression}</Text>
-          <Text testID="calc-display" style={styles.value} numberOfLines={1} adjustsFontSizeToFit>₹{current}</Text>
+          <Text style={styles.expr}>{calc.expression}</Text>
+          <Text testID="calc-display" style={styles.value} numberOfLines={1} adjustsFontSizeToFit>₹{calc.current}</Text>
         </View>
         <View style={styles.pad}>
-          {keys.map((row, ri) => (
+          {CALC_KEYS.map((row, ri) => (
             <View key={ri} style={styles.row}>
               {row.map((k) => {
-                const isOp = ["÷", "×", "-", "+"].includes(k);
+                const isOp = CALC_OPS.includes(k);
                 const isEq = k === "=";
                 const isFn = k === "C" || k === "⌫";
                 const wide = k === "0";
                 return (
-                  <Pressable key={k} testID={`calc-key-${k}`} onPress={() => press(k)} style={[styles.key, wide && styles.keyWide, isOp && styles.keyOp, isEq && styles.keyEq, isFn && styles.keyFn]}>
+                  <Pressable key={k} testID={`calc-key-${k}`} onPress={() => calc.press(k)} style={[styles.key, wide && styles.keyWide, isOp && styles.keyOp, isEq && styles.keyEq, isFn && styles.keyFn]}>
                     <Text style={[styles.keyText, isOp && styles.keyTextLight, isEq && { color: "#FFF" }, isFn && { color: COLORS.red }]}>{k}</Text>
                   </Pressable>
                 );

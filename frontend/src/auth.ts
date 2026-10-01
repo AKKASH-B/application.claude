@@ -5,15 +5,26 @@ export type User = { id: string; username: string; phone?: string; email?: strin
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const token = await storage.secureGet(TOKEN_KEY, null);
-  const response = await fetch(`${API}${path}`, {
-    ...init,
-    headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(init.headers || {}) },
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${API}${path}`, {
+      ...init,
+      headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(init.headers || {}) },
+    });
+  } catch {
+    const offline = new Error("Can't reach SpendPulse. Check your internet connection and try again.") as Error & { status?: number };
+    offline.status = 0;
+    throw offline;
+  }
   const body = response.status === 204 ? null : await response.json().catch(() => ({}));
   if (!response.ok) {
-    const err = new Error(body?.detail || "Something went wrong") as Error & { status?: number; detail?: string };
+    // FastAPI validation errors arrive as an array of {msg} objects; flatten them into readable text.
+    const detailText = Array.isArray(body?.detail)
+      ? body.detail.map((d: { msg?: string }) => (d.msg || "").replace(/^Value error, /, "")).filter(Boolean).join(" ")
+      : body?.detail;
+    const err = new Error(detailText || "Something went wrong") as Error & { status?: number; detail?: string };
     err.status = response.status;
-    err.detail = body?.detail;
+    err.detail = detailText;
     throw err;
   }
   return body as T;
@@ -40,7 +51,12 @@ export async function signIn(username: string, pin: string) {
 export async function restoreSession() {
   const token = await storage.secureGet(TOKEN_KEY, null);
   if (!token) return null;
-  try { return await request<User>("/me"); } catch { await storage.secureRemove(TOKEN_KEY); return null; }
+  try { return await request<User>("/me"); } catch (e) {
+    // Only drop the saved login when the server says it is invalid — not when the phone is merely offline.
+    const status = (e as { status?: number }).status;
+    if (status === 401 || status === 403) await storage.secureRemove(TOKEN_KEY);
+    return null;
+  }
 }
 
 export async function signOut() {

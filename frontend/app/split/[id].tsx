@@ -127,6 +127,10 @@ export default function SplitEditor() {
   };
 
   const save = async () => {
+    if (totalNum > 1_000_000_000) {
+      Alert.alert("Amount too large", "Enter a total up to ₹100 crore (1,000,000,000).");
+      return;
+    }
     if (!valid) {
       Alert.alert("Fix before saving", reason || "Amounts don't add up.");
       return;
@@ -232,6 +236,7 @@ export default function SplitEditor() {
             <Text style={s.eyebrow}>TOTAL AMOUNT</Text>
             <TextInput
               testID="split-total"
+              maxLength={13}
               value={total}
               onChangeText={setTotal}
               keyboardType="decimal-pad"
@@ -242,6 +247,7 @@ export default function SplitEditor() {
             />
             <TextInput
               testID="split-note"
+              maxLength={120}
               value={note}
               onChangeText={setNote}
               placeholder="What was this for? (optional)"

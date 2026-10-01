@@ -120,6 +120,9 @@ def validate_pin(value: str) -> str:
 # it just no longer needs to be prevented.
 
 
+# Largest amount accepted for any single transaction, budget, goal or split (1 billion).
+MAX_AMOUNT = 1_000_000_000
+
 LOGIN_MAX_ATTEMPTS = 5
 LOGIN_LOCKOUT_MINUTES = 15
 LOGIN_ATTEMPT_WINDOW_MINUTES = 15
@@ -231,7 +234,7 @@ class AdminResetPinInput(BaseModel):
 
 class AdminTransactionUpdate(BaseModel):
     type: Optional[Literal["expense", "income", "savings"]] = None
-    amount: Optional[float] = Field(default=None, gt=0)
+    amount: Optional[float] = Field(default=None, gt=0, le=MAX_AMOUNT)
     category: Optional[str] = Field(default=None, min_length=1, max_length=40)
     note: Optional[str] = Field(default=None, max_length=120)
     date: Optional[str] = Field(default=None, min_length=10, max_length=10)
@@ -320,7 +323,7 @@ class VerifyEmailInput(BaseModel):
 
 class TransactionCreate(BaseModel):
     type: Literal["expense", "income", "savings"]
-    amount: float = Field(gt=0)
+    amount: float = Field(gt=0, le=MAX_AMOUNT)
     category: str = Field(min_length=1, max_length=40)
     note: Optional[str] = Field(default="", max_length=120)
     date: str = Field(min_length=10, max_length=10)
@@ -343,7 +346,7 @@ class Transaction(TransactionCreate):
 
 class BudgetUpsert(BaseModel):
     category: str = Field(min_length=1, max_length=40)
-    monthly_limit: float = Field(gt=0)
+    monthly_limit: float = Field(gt=0, le=MAX_AMOUNT)
 
 
 class Budget(BaseModel):
@@ -355,7 +358,7 @@ class Budget(BaseModel):
 
 class SavingsGoalCreate(BaseModel):
     name: str = Field(min_length=1, max_length=40)
-    target: float = Field(gt=0)
+    target: float = Field(gt=0, le=MAX_AMOUNT)
     target_date: Optional[str] = Field(default=None)
 
     @field_validator("target_date")
@@ -372,7 +375,7 @@ class SavingsGoalCreate(BaseModel):
 
 class SavingsGoalUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=40)
-    target: Optional[float] = Field(default=None, gt=0)
+    target: Optional[float] = Field(default=None, gt=0, le=MAX_AMOUNT)
     target_date: Optional[str] = Field(default=None)
     celebrated: Optional[bool] = None
 
@@ -432,7 +435,7 @@ class SplitMemberInput(BaseModel):
     name: str = Field(min_length=1, max_length=40)
     phone: Optional[str] = Field(default=None, max_length=20)
     share_value: float = Field(ge=0)
-    owed_amount: float = Field(ge=0)
+    owed_amount: float = Field(ge=0, le=MAX_AMOUNT)
     settled: bool = False
     is_payer: bool = False
 
@@ -453,7 +456,7 @@ class SplitMember(BaseModel):
 
 
 class SplitSessionCreate(BaseModel):
-    total_amount: float = Field(gt=0)
+    total_amount: float = Field(gt=0, le=MAX_AMOUNT)
     note: Optional[str] = Field(default="", max_length=120)
     mode: SplitMode
     members: List[SplitMemberInput]
@@ -487,7 +490,7 @@ class SplitSessionCreate(BaseModel):
 
 
 class SplitSessionUpdate(BaseModel):
-    total_amount: Optional[float] = Field(default=None, gt=0)
+    total_amount: Optional[float] = Field(default=None, gt=0, le=MAX_AMOUNT)
     note: Optional[str] = Field(default=None, max_length=120)
     mode: Optional[SplitMode] = None
     members: Optional[List[SplitMemberInput]] = None
@@ -612,8 +615,22 @@ def _to_user_response(doc: dict[str, Any]) -> UserResponse:
     )
 
 
+# Behind a reverse proxy (Vercel, Render, Railway, nginx...) request.client.host is the PROXY's address,
+# so every user would share one rate-limit bucket. On Vercel the platform overwrites X-Forwarded-For /
+# X-Real-IP with the real client address, so they can be trusted there. Elsewhere only trust them when
+# you opt in with TRUST_PROXY_HEADERS=true (otherwise a client could spoof the header).
+TRUST_PROXY_HEADERS = bool(os.environ.get("VERCEL")) or os.environ.get("TRUST_PROXY_HEADERS", "").strip().lower() in ("1", "true", "yes")
+
+
 def _get_client_ip(request: Request) -> str:
-    """Extract the client IP from the request, accounting for proxies."""
+    """Extract the client IP from the request, accounting for trusted proxies."""
+    if TRUST_PROXY_HEADERS:
+        real_ip = (request.headers.get("x-real-ip") or "").strip()
+        if real_ip:
+            return real_ip[:64]
+        forwarded = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+        if forwarded:
+            return forwarded[:64]
     if request.client:
         return request.client.host
     return "unknown"
