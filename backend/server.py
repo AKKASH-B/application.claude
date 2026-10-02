@@ -401,6 +401,36 @@ class SavingsGoal(BaseModel):
     updated_at: str
 
 
+# ---------- Planning (next-month budget plans) ----------
+PlanKind = Literal["expense", "savings", "income"]
+MONTH_PATTERN = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
+
+
+class PlanItem(BaseModel):
+    id: str = Field(min_length=1, max_length=64)
+    kind: PlanKind
+    label: str = Field(min_length=1, max_length=40)
+    amount: float = Field(gt=0, le=MAX_AMOUNT)
+
+    @field_validator("label")
+    @classmethod
+    def clean_label(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Give each planned item a name.")
+        return cleaned
+
+
+class PlanUpsert(BaseModel):
+    items: List[PlanItem] = Field(default_factory=list, max_length=60)
+
+
+class Plan(BaseModel):
+    month: str
+    items: List[PlanItem]
+    updated_at: Optional[str] = None
+
+
 # ---------- Split / Friends models ----------
 SplitMode = Literal["equal", "unequal", "shares"]
 
@@ -871,6 +901,7 @@ async def delete_my_account(input: DeleteAccountInput, user: dict[str, Any] = De
     uid = user["id"]
     await db.transactions.delete_many({"owner_id": uid})
     await db.budgets.delete_many({"owner_id": uid})
+    await db.plans.delete_many({"owner_id": uid})
     await db.savings_goals.delete_many({"owner_id": uid})
     await db.splits.delete_many({"owner_id": uid})
     await db.friends.delete_many({"owner_id": uid})
@@ -1071,6 +1102,31 @@ async def delete_budget(category: str, user: dict[str, Any] = Depends(current_us
     return {"ok": True}
 
 
+@api_router.get("/plans", response_model=List[Plan])
+async def get_plans(user: dict[str, Any] = Depends(current_user)):
+    docs = await db.plans.find({"owner_id": user["id"]}, {"_id": 0, "owner_id": 0}).to_list(60)
+    return [Plan(**doc) for doc in docs]
+
+
+@api_router.put("/plans/{month}", response_model=Plan)
+async def put_plan(month: str, input: PlanUpsert, user: dict[str, Any] = Depends(current_user)):
+    if not MONTH_PATTERN.match(month):
+        raise HTTPException(status_code=422, detail="Month must look like 2026-11.")
+    now = datetime.now(timezone.utc).isoformat()
+    items = [item.model_dump() for item in input.items]
+    if not items:
+        await db.plans.delete_one({"owner_id": user["id"], "month": month})
+        return Plan(month=month, items=[], updated_at=now)
+    if await db.plans.count_documents({"owner_id": user["id"], "month": {"$ne": month}}) >= 36:
+        raise HTTPException(status_code=400, detail="You can keep plans for up to 36 months.")
+    await db.plans.update_one(
+        {"owner_id": user["id"], "month": month},
+        {"$set": {"items": items, "updated_at": now}, "$setOnInsert": {"owner_id": user["id"], "month": month}},
+        upsert=True,
+    )
+    return Plan(month=month, items=input.items, updated_at=now)
+
+
 @api_router.get("/savings-goals", response_model=List[SavingsGoal])
 async def get_savings_goals(user: dict[str, Any] = Depends(current_user)):
     docs = await db.savings_goals.find({"owner_id": user["id"]}, {"_id": 0, "owner_id": 0}).sort("created_at", 1).to_list(100)
@@ -1134,7 +1190,7 @@ async def admin_list_users(admin: dict[str, Any] = Depends(current_admin)):
     for u in users:
         await _ensure_role(u)
         txs = await db.transactions.find({"owner_id": u["id"]}, {"_id": 0, "type": 1, "amount": 1}).to_list(10000)
-        balance = sum(t["amount"] if t["type"] == "income" else (-t["amount"] if t["type"] == "expense" else 0) for t in txs)
+        balance = sum(t["amount"] if t["type"] == "income" else -t["amount"] for t in txs)  # expenses and savings both reduce the balance
         summaries.append(AdminUserSummary(
             id=u["id"], username=u.get("username") or "user", email=u.get("email") or "", phone=u.get("phone") or "",
             role=u.get("role") or "user", disabled=bool(u.get("disabled")),
@@ -1179,6 +1235,7 @@ async def admin_delete_user(user_id: str, admin: dict[str, Any] = Depends(curren
     await db.users.delete_one({"id": user_id})
     await db.transactions.delete_many({"owner_id": user_id})
     await db.budgets.delete_many({"owner_id": user_id})
+    await db.plans.delete_many({"owner_id": user_id})
     await db.savings_goals.delete_many({"owner_id": user_id})
     await db.splits.delete_many({"owner_id": user_id})
     await db.friends.delete_many({"owner_id": user_id})
@@ -1467,6 +1524,7 @@ async def _startup_indexes():
         await db.otp_tokens.delete_many({"purpose": {"$exists": False}})  # old phone-OTP records
         await db.otp_tokens.create_index([("purpose", 1), ("email", 1)], unique=True)
         await db.otp_requests.create_index("expires_at", expireAfterSeconds=0)
+        await db.plans.create_index([("owner_id", 1), ("month", 1)], unique=True)
         # TTL index: Mongo auto-deletes a revoked_tokens doc once its expires_at
         # (the JWT's own expiry) is in the past, so the denylist self-cleans
         # instead of growing forever.
