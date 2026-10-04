@@ -88,7 +88,6 @@ function Dashboard({ user, onSignedOut }: { user: User; onSignedOut: () => void 
   const cardTx = useMemo(() => allTransactions.filter((t) => t.account === "card"), [allTransactions]);
   const isCard = account === "card";
   const transactions = isCard ? cardTx : primaryTx;
-  const cardTotal = cardTx.reduce((sum, t) => sum + t.amount, 0);
   const primaryRaw = primaryTx.reduce((sum, t) => sum + (t.type === "income" ? t.amount : -t.amount), 0);
   const primaryBalance = Math.abs(primaryRaw) < 0.5 ? 0 : Math.round(primaryRaw * 100) / 100;
   const current = useMemo(() => transactions.filter((t) => t.date.startsWith(month)), [transactions, month]);
@@ -239,11 +238,11 @@ function Dashboard({ user, onSignedOut }: { user: User; onSignedOut: () => void 
 
   return <SafeAreaView style={styles.safe}><ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
     <View style={styles.top}><Pressable testID="open-side-menu" onPress={() => setMenuOpen(true)} hitSlop={8} style={menuStyles.burger}><Feather name="menu" size={22} color={COLORS.ink} /></Pressable><View style={{ flex: 1 }}><Text style={styles.eyebrow}>PERSONAL FINANCE</Text><Text style={styles.title}>Hi {user.username}</Text><View style={styles.profileMetaRow}><Text style={styles.sectionSub} numberOfLines={1}>{recoveryEmail || user.phone || ""}</Text></View></View><View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}><Pressable testID="open-profile" onPress={() => setProfileOpen(true)} style={styles.avatar}><Text style={styles.avatarText}>{user.username.slice(0, 2).toUpperCase()}</Text></Pressable></View></View>
-    <View style={[styles.hero, isCard && { backgroundColor: "#2A2D3A" }]}>
+    <View style={styles.hero}>
       <View style={styles.heroTop}>
         <Text style={styles.heroLabel}>{isCard ? `CREDIT CARD · ${monthLabel(month).toUpperCase()}` : "TOTAL BALANCE"}</Text>
         <Pressable testID="switch-account" accessibilityLabel={isCard ? "Switch to primary account" : "Switch to credit card"} onPress={() => setAccount(isCard ? "primary" : "card")} hitSlop={8} style={[heroStyles.switchBtn, isCard && { backgroundColor: "#FFFFFF" }]}>
-          <Feather name="credit-card" size={18} color={isCard ? "#2A2D3A" : "#FFFFFF"} />
+          <Feather name="credit-card" size={24} color={isCard ? COLORS.green : "#FFFFFF"} />
         </Pressable>
       </View>
       {isCard
@@ -251,11 +250,10 @@ function Dashboard({ user, onSignedOut }: { user: User; onSignedOut: () => void 
         : <Text testID="total-balance" style={[styles.balance, balance < 0 && styles.balanceNeg]}>{balance < 0 ? "-" : ""}{money(balance)}</Text>}
       <View style={styles.delta}>
         <Feather name={isCard ? "arrow-up-right" : "trending-up"} size={13} color="#D7E8DE" />
-        <Text style={styles.deltaText}>{isCard ? `${money(cardTotal)} spent all time` : balance < 0 ? "Spending is ahead of income" : "Available after savings"}</Text>
+        <Text style={styles.deltaText}>{isCard ? "Spent this month" : balance < 0 ? "Spending is ahead of income" : "Available after savings"}</Text>
       </View>
       <View style={styles.heroBottom}>
-        <Text style={styles.heroSmall}>{isCard ? "Spending only · tap the card icon to go back" : "All time · tap the card icon for your credit card"}</Text>
-        <Text style={styles.heroSmall}>{transactions.length} {transactions.length === 1 ? "entry" : "entries"}</Text>
+        <Text style={styles.heroSmall}>{transactions.length} {transactions.length === 1 ? "transaction" : "transactions"}</Text>
       </View>
     </View>
     {!isCard && overBudget.length > 0 && <View testID="budget-alert-banner" style={styles.alertBanner}><Feather name="alert-triangle" size={16} color={COLORS.red} /><Text style={styles.alertText}>Over budget on {overBudget.map((x) => x.category).join(", ")}</Text></View>}
@@ -268,7 +266,7 @@ function Dashboard({ user, onSignedOut }: { user: User; onSignedOut: () => void 
       </View>
       <View style={styles.sectionHeader}><View><Text style={styles.sectionTitle}>Monthly summary</Text><Text style={styles.sectionSub}>{isCurrentMonth ? "Live overview" : isFutureMonth ? "Future month view" : "Past month view"}</Text></View><Pressable testID="add-transaction-small" onPress={openAdd} style={styles.addSmall}><Feather name="plus" size={18} color="#FFF" /></Pressable></View>
       {isCard
-        ? <View style={styles.summaryGrid}><Metric label="Spent this month" value={spent} tone={COLORS.red} icon="arrow-up-right" /><Metric label="Spent all time" value={cardTotal} tone={COLORS.muted} icon="credit-card" /></View>
+        ? <View style={styles.summaryGrid}><Metric label="Spent this month" value={spent} tone={COLORS.red} icon="arrow-up-right" /></View>
         : <View style={styles.summaryGrid}><Metric label="Transferred" value={spent} tone={COLORS.red} icon="arrow-up-right" /><Metric label="Received" value={income} tone={COLORS.green} icon="arrow-down-left" /><Metric label="Savings" value={savings} tone={COLORS.gold} icon="pie-chart" /></View>}
       {!isCard && <>
       <View style={styles.sectionHeader}><View><Text style={styles.sectionTitle}>Savings goals</Text><Text style={styles.sectionSub}>Track your targets & progress</Text></View><Pressable testID="add-goal-btn" onPress={openNewGoal} style={styles.addSmall}><Feather name="plus" size={18} color="#FFF" /></Pressable></View>
@@ -375,5 +373,5 @@ const menuStyles = StyleSheet.create({
 });
 
 const heroStyles = StyleSheet.create({
-  switchBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: "rgba(255,255,255,0.18)", alignItems: "center", justifyContent: "center" },
+  switchBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: "rgba(255,255,255,0.18)", alignItems: "center", justifyContent: "center" },
 });
