@@ -22,6 +22,8 @@ import { RecentActivityGrouped } from "@/src/dashboard/RecentActivityGrouped";
 import { CalculatorTab } from "@/src/dashboard/CalculatorTab";
 import { PlanningTab } from "@/src/dashboard/PlanningTab";
 import { ChecklistTab } from "@/src/dashboard/ChecklistTab";
+import { ProfileSheet } from "@/src/dashboard/ProfileSheet";
+import { computeStreak } from "@/src/dashboard/streak";
 
 export default function Index() {
   const [user, setUser] = useState<User | null>(null);
@@ -40,6 +42,7 @@ function Dashboard({ user, onSignedOut }: { user: User; onSignedOut: () => void 
   const [month, setMonth] = useState(nowMonth());
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
   const pickMenu = (action: () => void) => { setMenuOpen(false); setTimeout(action, 60); };
   const [changePwOpen, setChangePwOpen] = useState(false);
   const [recoveryOpen, setRecoveryOpen] = useState(false);
@@ -95,6 +98,7 @@ function Dashboard({ user, onSignedOut }: { user: User; onSignedOut: () => void 
   }, [transactions]);
   const rawBalance = transactions.reduce((s, t) => s + (t.type === "income" ? t.amount : -t.amount), 0); // expenses AND savings leave the available balance
   const balance = Math.abs(rawBalance) < 0.5 ? 0 : Math.round(rawBalance * 100) / 100;
+  const streak = useMemo(() => computeStreak(transactions), [transactions]);
   const byCategory = TRANSFERRED_CATEGORIES.map((category) => ({ category, amount: current.filter((t) => t.type === "expense" && t.category === category).reduce((s, t) => s + t.amount, 0) })).filter((x) => x.amount > 0).sort((a, b) => b.amount - a.amount);
   const max = byCategory[0]?.amount || 1;
   const budgetMap = useMemo(() => Object.fromEntries(budgets.map((b) => [b.category, b.monthly_limit])) as Record<string, number>, [budgets]);
@@ -223,7 +227,7 @@ function Dashboard({ user, onSignedOut }: { user: User; onSignedOut: () => void 
   }, [savingsGoals, savedByGoal, celebrateGoal, markCelebrated]);
 
   return <SafeAreaView style={styles.safe}><ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-    <View style={styles.top}><Pressable testID="open-side-menu" onPress={() => setMenuOpen(true)} hitSlop={8} style={menuStyles.burger}><Feather name="menu" size={22} color={COLORS.ink} /></Pressable><View style={{ flex: 1 }}><Text style={styles.eyebrow}>PERSONAL FINANCE</Text><Text style={styles.title}>Hi {user.username}</Text><View style={styles.profileMetaRow}><Text style={styles.sectionSub} numberOfLines={1}>{recoveryEmail || user.phone || ""}</Text></View></View><View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}><Pressable testID="open-settings" onPress={() => setSettingsOpen(true)} style={styles.avatar}><Text style={styles.avatarText}>{user.username.slice(0, 2).toUpperCase()}</Text></Pressable></View></View>
+    <View style={styles.top}><Pressable testID="open-side-menu" onPress={() => setMenuOpen(true)} hitSlop={8} style={menuStyles.burger}><Feather name="menu" size={22} color={COLORS.ink} /></Pressable><View style={{ flex: 1 }}><Text style={styles.eyebrow}>PERSONAL FINANCE</Text><Text style={styles.title}>Hi {user.username}</Text><View style={styles.profileMetaRow}><Text style={styles.sectionSub} numberOfLines={1}>{recoveryEmail || user.phone || ""}</Text></View></View><View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}><Pressable testID="open-profile" onPress={() => setProfileOpen(true)} style={styles.avatar}><Text style={styles.avatarText}>{user.username.slice(0, 2).toUpperCase()}</Text></Pressable></View></View>
     <View style={styles.hero}><View style={styles.heroTop}><Text style={styles.heroLabel}>TOTAL BALANCE</Text><Feather name="more-horizontal" size={20} color="#B5C8BE" /></View><Text testID="total-balance" style={[styles.balance, balance < 0 && styles.balanceNeg]}>{balance < 0 ? "-" : ""}{money(balance)}</Text><View style={styles.delta}><Feather name="trending-up" size={13} color="#D7E8DE" /><Text style={styles.deltaText}>{balance < 0 ? "Spending is ahead of income" : "Available after savings"}</Text></View><View style={styles.heroBottom}><Text style={styles.heroSmall}>All time</Text><Text style={styles.heroSmall}>{transactions.length} transactions</Text></View></View>
     {overBudget.length > 0 && <View testID="budget-alert-banner" style={styles.alertBanner}><Feather name="alert-triangle" size={16} color={COLORS.red} /><Text style={styles.alertText}>Over budget on {overBudget.map((x) => x.category).join(", ")}</Text></View>}
     {balance < 0 && <View testID="low-balance-alert" style={styles.lowBalanceCard}><View style={styles.lowBalanceIcon}><Feather name="trending-down" size={18} color={COLORS.red} /></View><View style={{ flex: 1 }}><Text style={styles.lowBalanceTitle}>Balance is in the red</Text><Text style={styles.lowBalanceSub}>You've transferred or saved {money(balance)} more than you've received. Ease up or add income to get back on track.</Text></View></View>}
@@ -245,6 +249,7 @@ function Dashboard({ user, onSignedOut }: { user: User; onSignedOut: () => void 
     </>}
   </ScrollView>
     <Pressable testID="add-transaction-fab" style={menuStyles.fab} onPress={openAdd}><Feather name="plus" size={26} color="#FFF" /></Pressable>
+    <ProfileSheet visible={profileOpen} username={user.username} email={recoveryEmail || undefined} streak={streak} onClose={() => setProfileOpen(false)} onOpenSettings={() => { setProfileOpen(false); setTimeout(() => setSettingsOpen(true), 60); }} />
     <Modal visible={menuOpen} transparent animationType="fade" onRequestClose={() => setMenuOpen(false)}>
       <View style={menuStyles.drawerWrap}>
         <View style={menuStyles.drawer}>
@@ -265,6 +270,7 @@ function Dashboard({ user, onSignedOut }: { user: User; onSignedOut: () => void 
             ["divide", "Calculator", () => setTab("Calculator")],
             ["check-square", "Checklist", () => setTab("Checklist")],
             ["users", "Splits", () => router.push("/splits")],
+            ["settings", "Settings", () => setSettingsOpen(true)],
           ] as [keyof typeof Feather.glyphMap, string, () => void][]).map(([icon, label, action]) => (
             <Pressable key={label} testID={`menu-${label.toLowerCase().replace(/\s+/g, "-")}`} onPress={() => pickMenu(action)} style={({ pressed }) => [menuStyles.item, tab === label && { backgroundColor: COLORS.pale }, pressed && { backgroundColor: COLORS.pale }]}>
               <Feather name={icon} size={20} color={tab === label ? COLORS.green : COLORS.ink} />
