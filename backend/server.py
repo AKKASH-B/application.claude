@@ -431,6 +431,30 @@ class Plan(BaseModel):
     updated_at: Optional[str] = None
 
 
+# ---------- Checklist ----------
+class ChecklistItem(BaseModel):
+    id: str = Field(min_length=1, max_length=64)
+    text: str = Field(min_length=1, max_length=80)
+    done: bool = False
+
+    @field_validator("text")
+    @classmethod
+    def clean_text(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Checklist items can't be empty.")
+        return cleaned
+
+
+class ChecklistUpsert(BaseModel):
+    items: List[ChecklistItem] = Field(default_factory=list, max_length=100)
+
+
+class Checklist(BaseModel):
+    items: List[ChecklistItem]
+    updated_at: Optional[str] = None
+
+
 # ---------- Split / Friends models ----------
 SplitMode = Literal["equal", "unequal", "shares"]
 
@@ -902,6 +926,7 @@ async def delete_my_account(input: DeleteAccountInput, user: dict[str, Any] = De
     await db.transactions.delete_many({"owner_id": uid})
     await db.budgets.delete_many({"owner_id": uid})
     await db.plans.delete_many({"owner_id": uid})
+    await db.checklists.delete_many({"owner_id": uid})
     await db.savings_goals.delete_many({"owner_id": uid})
     await db.splits.delete_many({"owner_id": uid})
     await db.friends.delete_many({"owner_id": uid})
@@ -1102,6 +1127,23 @@ async def delete_budget(category: str, user: dict[str, Any] = Depends(current_us
     return {"ok": True}
 
 
+@api_router.get("/checklist", response_model=Checklist)
+async def get_checklist(user: dict[str, Any] = Depends(current_user)):
+    doc = await db.checklists.find_one({"owner_id": user["id"]}, {"_id": 0, "owner_id": 0})
+    return Checklist(**(doc or {"items": []}))
+
+
+@api_router.put("/checklist", response_model=Checklist)
+async def put_checklist(input: ChecklistUpsert, user: dict[str, Any] = Depends(current_user)):
+    now = datetime.now(timezone.utc).isoformat()
+    await db.checklists.update_one(
+        {"owner_id": user["id"]},
+        {"$set": {"items": [item.model_dump() for item in input.items], "updated_at": now}, "$setOnInsert": {"owner_id": user["id"]}},
+        upsert=True,
+    )
+    return Checklist(items=input.items, updated_at=now)
+
+
 @api_router.get("/plans", response_model=List[Plan])
 async def get_plans(user: dict[str, Any] = Depends(current_user)):
     docs = await db.plans.find({"owner_id": user["id"]}, {"_id": 0, "owner_id": 0}).to_list(60)
@@ -1236,6 +1278,7 @@ async def admin_delete_user(user_id: str, admin: dict[str, Any] = Depends(curren
     await db.transactions.delete_many({"owner_id": user_id})
     await db.budgets.delete_many({"owner_id": user_id})
     await db.plans.delete_many({"owner_id": user_id})
+    await db.checklists.delete_many({"owner_id": user_id})
     await db.savings_goals.delete_many({"owner_id": user_id})
     await db.splits.delete_many({"owner_id": user_id})
     await db.friends.delete_many({"owner_id": user_id})
@@ -1525,6 +1568,7 @@ async def _startup_indexes():
         await db.otp_tokens.create_index([("purpose", 1), ("email", 1)], unique=True)
         await db.otp_requests.create_index("expires_at", expireAfterSeconds=0)
         await db.plans.create_index([("owner_id", 1), ("month", 1)], unique=True)
+        await db.checklists.create_index("owner_id", unique=True)
         # TTL index: Mongo auto-deletes a revoked_tokens doc once its expires_at
         # (the JWT's own expiry) is in the past, so the denylist self-cleans
         # instead of growing forever.

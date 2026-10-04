@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { router } from "expo-router";
 import { Feather, MaterialCommunityIcons } from "@expo/vector-icons";
@@ -8,7 +8,7 @@ import { authorizedRequest, restoreSession, signOut, User } from "@/src/auth";
 import type { Budget, SavingsGoal, Transaction, TxType } from "@/src/dashboard/types";
 import { COLORS, SAVINGS_CATEGORIES, TRANSFERRED_CATEGORIES, categoriesFor, money, monthLabel, nowMonth, shiftMonth } from "@/src/dashboard/constants";
 import { styles, authStyles } from "@/src/dashboard/styles";
-import { Bar, Empty, Metric, Nav, TransactionRow } from "@/src/dashboard/primitives";
+import { Bar, Empty, Metric, TransactionRow } from "@/src/dashboard/primitives";
 import { GoalCard } from "@/src/dashboard/GoalCard";
 import { CategoriesView } from "@/src/dashboard/CategoriesView";
 import { Analytics } from "@/src/dashboard/Analytics";
@@ -21,6 +21,7 @@ import { DailySpendAnalysisTab } from "@/src/dashboard/DailySpendAnalysisTab";
 import { RecentActivityGrouped } from "@/src/dashboard/RecentActivityGrouped";
 import { CalculatorTab } from "@/src/dashboard/CalculatorTab";
 import { PlanningTab } from "@/src/dashboard/PlanningTab";
+import { ChecklistTab } from "@/src/dashboard/ChecklistTab";
 
 export default function Index() {
   const [user, setUser] = useState<User | null>(null);
@@ -38,6 +39,16 @@ function Dashboard({ user, onSignedOut }: { user: User; onSignedOut: () => void 
   const [tab, setTab] = useState("Overview");
   const [month, setMonth] = useState(nowMonth());
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuTop, setMenuTop] = useState(90);
+  const avatarRef = useRef<View>(null);
+  const openMenu = () => {
+    // Measure the avatar so the dropdown sits right under it on every screen size.
+    const node = avatarRef.current;
+    if (node && typeof node.measureInWindow === "function") node.measureInWindow((_x, y, _w, h) => { setMenuTop((y || 0) + (h || 44) + 8); setMenuOpen(true); });
+    else setMenuOpen(true);
+  };
+  const pickMenu = (action: () => void) => { setMenuOpen(false); setTimeout(action, 60); };
   const [changePwOpen, setChangePwOpen] = useState(false);
   const [recoveryOpen, setRecoveryOpen] = useState(false);
   const [deleteAcctOpen, setDeleteAcctOpen] = useState(false);
@@ -220,12 +231,12 @@ function Dashboard({ user, onSignedOut }: { user: User; onSignedOut: () => void 
   }, [savingsGoals, savedByGoal, celebrateGoal, markCelebrated]);
 
   return <SafeAreaView style={styles.safe}><ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-    <View style={styles.top}><View style={{ flex: 1 }}><Text style={styles.eyebrow}>PERSONAL FINANCE</Text><Text style={styles.title}>Hi {user.username}</Text><View style={styles.profileMetaRow}><Text style={styles.sectionSub} numberOfLines={1}>{recoveryEmail || user.phone || ""}</Text></View></View><View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}><Pressable testID="open-settings" onPress={() => setSettingsOpen(true)} style={styles.avatar}><Text style={styles.avatarText}>{user.username.slice(0, 2).toUpperCase()}</Text></Pressable></View></View>
+    <View style={styles.top}><View style={{ flex: 1 }}><Text style={styles.eyebrow}>PERSONAL FINANCE</Text><Text style={styles.title}>Hi {user.username}</Text><View style={styles.profileMetaRow}><Text style={styles.sectionSub} numberOfLines={1}>{recoveryEmail || user.phone || ""}</Text></View></View><View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}><Pressable ref={avatarRef} collapsable={false} testID="open-profile-menu" onPress={openMenu} style={styles.avatar}><Text style={styles.avatarText}>{user.username.slice(0, 2).toUpperCase()}</Text></Pressable></View></View>
     <View style={styles.hero}><View style={styles.heroTop}><Text style={styles.heroLabel}>TOTAL BALANCE</Text><Feather name="more-horizontal" size={20} color="#B5C8BE" /></View><Text testID="total-balance" style={[styles.balance, balance < 0 && styles.balanceNeg]}>{balance < 0 ? "-" : ""}{money(balance)}</Text><View style={styles.delta}><Feather name="trending-up" size={13} color="#D7E8DE" /><Text style={styles.deltaText}>{balance < 0 ? "Spending is ahead of income" : "Available after savings"}</Text></View><View style={styles.heroBottom}><Text style={styles.heroSmall}>All time</Text><Text style={styles.heroSmall}>{transactions.length} transactions</Text></View></View>
     {overBudget.length > 0 && <View testID="budget-alert-banner" style={styles.alertBanner}><Feather name="alert-triangle" size={16} color={COLORS.red} /><Text style={styles.alertText}>Over budget on {overBudget.map((x) => x.category).join(", ")}</Text></View>}
     {balance < 0 && <View testID="low-balance-alert" style={styles.lowBalanceCard}><View style={styles.lowBalanceIcon}><Feather name="trending-down" size={18} color={COLORS.red} /></View><View style={{ flex: 1 }}><Text style={styles.lowBalanceTitle}>Balance is in the red</Text><Text style={styles.lowBalanceSub}>You've transferred or saved {money(balance)} more than you've received. Ease up or add income to get back on track.</Text></View></View>}
     <View style={styles.tabs}>{["Overview", "Analytics", "Categories", "Calendar", "Planning"].map((x) => <Pressable testID={`tab-${x.toLowerCase()}`} key={x} onPress={() => setTab(x)} style={[styles.tab, tab === x && styles.tabActive]}><Text style={[styles.tabText, tab === x && styles.tabTextActive]} numberOfLines={1}>{x}</Text></Pressable>)}</View>
-    {loading ? <ActivityIndicator color={COLORS.green} style={styles.loader} /> : tab === "Daily Spends" ? <DailySpendAnalysisTab transactions={transactions} month={month} onMonthChange={setMonth} /> : tab === "Calculator" ? <CalculatorTab /> : tab === "Planning" ? <PlanningTab balance={balance} transactions={transactions} /> : tab === "Calendar" ? <CalendarView transactions={transactions} onOpenTx={setActionsFor} onAdd={openAdd} /> : tab === "Categories" ? <CategoriesView data={byCategory} max={max} budgetMap={budgetMap} onEditBudget={setBudgetSheet} transactions={transactions} month={month} onMonthChange={setMonth} /> : tab === "Analytics" ? <Analytics spent={spent} income={income} data={byCategory} max={max} transactions={transactions} month={month} onMonthChange={setMonth} /> : <>
+    {loading ? <ActivityIndicator color={COLORS.green} style={styles.loader} /> : tab === "Daily Spends" ? <DailySpendAnalysisTab transactions={transactions} month={month} onMonthChange={setMonth} /> : tab === "Calculator" ? <CalculatorTab /> : tab === "Planning" ? <PlanningTab balance={balance} transactions={transactions} /> : tab === "Checklist" ? <ChecklistTab /> : tab === "Calendar" ? <CalendarView transactions={transactions} onOpenTx={setActionsFor} onAdd={openAdd} /> : tab === "Categories" ? <CategoriesView data={byCategory} max={max} budgetMap={budgetMap} onEditBudget={setBudgetSheet} transactions={transactions} month={month} onMonthChange={setMonth} /> : tab === "Analytics" ? <Analytics spent={spent} income={income} data={byCategory} max={max} transactions={transactions} month={month} onMonthChange={setMonth} /> : <>
       <View style={styles.monthPicker}>
         <Pressable testID="prev-month" onPress={() => setMonth((m) => shiftMonth(m, -1))} style={styles.monthNav}><Feather name="chevron-left" size={18} color={COLORS.ink} /></Pressable>
         <Text testID="month-label" style={styles.monthText}>{monthLabel(month)}</Text>
@@ -241,7 +252,25 @@ function Dashboard({ user, onSignedOut }: { user: User; onSignedOut: () => void 
       <View style={styles.sectionHeader}><View><Text style={styles.sectionTitle}>Recent activity</Text><Text style={styles.sectionSub}>Long-press to edit or delete</Text></View></View>
       <View style={styles.card}><RecentActivityGrouped transactions={recentSorted} onLongPress={setActionsFor} maxGroups={3} /></View>
     </>}
-  </ScrollView><View style={styles.bottom}><Nav icon="trending-down" label="Daily Spends" active={tab === "Daily Spends"} onPress={() => setTab("Daily Spends")} /><Nav icon="divide" label="Calculator" active={tab === "Calculator"} onPress={() => setTab("Calculator")} /><Pressable testID="add-transaction-fab" style={styles.fab} onPress={openAdd}><Feather name="plus" size={24} color="#FFF" /></Pressable><Nav icon="users" label="Splits" active={false} onPress={() => router.push("/splits")} /><Nav icon="settings" label="Settings" active={false} onPress={() => setSettingsOpen(true)} /></View>
+  </ScrollView>
+    <Pressable testID="add-transaction-fab" style={menuStyles.fab} onPress={openAdd}><Feather name="plus" size={26} color="#FFF" /></Pressable>
+    <Modal visible={menuOpen} transparent animationType="fade" onRequestClose={() => setMenuOpen(false)}>
+      <Pressable testID="profile-menu-backdrop" style={StyleSheet.absoluteFill} onPress={() => setMenuOpen(false)} />
+      <View style={[menuStyles.menu, { top: menuTop }]}>
+        {([
+          ["trending-down", "Daily Spends", () => setTab("Daily Spends")],
+          ["divide", "Calculator", () => setTab("Calculator")],
+          ["check-square", "Checklist", () => setTab("Checklist")],
+          ["users", "Splits", () => router.push("/splits")],
+          ["settings", "Settings", () => setSettingsOpen(true)],
+        ] as [keyof typeof Feather.glyphMap, string, () => void][]).map(([icon, label, action]) => (
+          <Pressable key={label} testID={`menu-${label.toLowerCase().replace(/\s+/g, "-")}`} onPress={() => pickMenu(action)} style={({ pressed }) => [menuStyles.item, pressed && { backgroundColor: COLORS.pale }]}>
+            <Feather name={icon} size={18} color={tab === label ? COLORS.green : COLORS.ink} />
+            <Text style={[menuStyles.itemText, tab === label && { color: COLORS.green }]}>{label}</Text>
+          </Pressable>
+        ))}
+      </View>
+    </Modal>
     <Modal visible={editorOpen} transparent animationType="slide" onRequestClose={closeEditor}><KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.modalShade}><View style={[styles.modal, { maxHeight: "92%" }]}><ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} contentContainerStyle={{ gap: 12, paddingBottom: 8 }}><View style={styles.modalHead}><Text style={styles.modalTitle}>{editing ? "Edit transaction" : "Add transaction"}</Text><Pressable testID="close-add-transaction" onPress={closeEditor}><Feather name="x" size={22} color={COLORS.muted} /></Pressable></View><View style={styles.typeRow}><Pressable testID="type-expense" onPress={() => chooseType("expense")} style={[styles.type, form.type === "expense" && styles.typeExpense]}><Text style={[styles.typeText, form.type === "expense" && { color: COLORS.red }]} numberOfLines={1}>Transferred</Text></Pressable><Pressable testID="type-income" onPress={() => chooseType("income")} style={[styles.type, form.type === "income" && styles.typeIncome]}><Text style={[styles.typeText, form.type === "income" && { color: COLORS.green }]} numberOfLines={1}>Received</Text></Pressable><Pressable testID="type-savings" onPress={() => chooseType("savings")} style={[styles.type, form.type === "savings" && styles.typeSavings]}><Text style={[styles.typeText, form.type === "savings" && { color: COLORS.gold }]} numberOfLines={1}>Savings</Text></Pressable></View><Text style={styles.inputLabel}>AMOUNT</Text><View style={styles.amountRow}><TextInput testID="transaction-amount" maxLength={13} value={form.amount} onChangeText={(amount) => setForm({ ...form, amount })} keyboardType="decimal-pad" placeholder="₹ 0" placeholderTextColor="#A9AAA5" style={[styles.input, { flex: 1 }]} /><Pressable testID="open-calculator" onPress={() => setCalcOpen(true)} style={styles.calcBtn}><MaterialCommunityIcons name="calculator-variant-outline" size={22} color={COLORS.green} /></Pressable></View><Text style={styles.inputLabel}>DATE</Text><Pressable testID="open-date-picker" onPress={() => setDatePickerOpen(true)} style={styles.dateField}><Feather name="calendar" size={18} color={COLORS.green} /><Text style={styles.dateFieldText}>{prettyDate(form.date)}</Text><Feather name="chevron-down" size={18} color={COLORS.muted} /></Pressable>{form.type === "savings" && savingsGoals.length > 0 ? <><Text style={styles.inputLabel}>ADD TO GOAL</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>{savingsGoals.map((g) => <Pressable testID={`goal-chip-${g.id}`} key={g.id} onPress={() => setForm({ ...form, goalId: g.id, category: g.name })} style={[styles.chip, form.goalId === g.id && styles.chipActive]}><Text style={[styles.chipText, form.goalId === g.id && styles.chipTextActive]}>{g.name}</Text></Pressable>)}<Pressable testID="goal-chip-general" onPress={() => setForm({ ...form, goalId: null, category: "General" })} style={[styles.chip, form.goalId === null && styles.chipActive]}><Text style={[styles.chipText, form.goalId === null && styles.chipTextActive]}>General</Text></Pressable></ScrollView></> : <><Text style={styles.inputLabel}>CATEGORY</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>{categoriesFor(form.type).map((c) => <Pressable testID={`category-${c.toLowerCase().replace(/\s+/g, "-")}`} key={c} onPress={() => setForm({ ...form, category: c })} style={[styles.chip, form.category === c && styles.chipActive]}><Text style={[styles.chipText, form.category === c && styles.chipTextActive]}>{c}</Text></Pressable>)}</ScrollView></>}<Text style={styles.inputLabel}>NOTE</Text><TextInput value={form.note} onChangeText={(note) => setForm({ ...form, note })} placeholder="Optional note" placeholderTextColor="#A9AAA5" maxLength={120} style={styles.input} /><Pressable testID="save-transaction" onPress={submitTransaction} style={styles.save}><Text style={styles.saveText}>{editing ? "Save changes" : "Save transaction"}</Text></Pressable>{!editing && form.type === "expense" ? <Pressable testID="split-from-form" onPress={handleSplitTap} style={styles.remove}><Text style={authStyles.linkText}>Split this with friends</Text></Pressable> : null}</ScrollView></View>
     <Modal visible={!!splitPrompt} transparent animationType="fade" onRequestClose={() => setSplitPrompt(null)}>
       <Pressable style={styles.modalShade} onPress={() => setSplitPrompt(null)}>
@@ -288,3 +317,10 @@ function Dashboard({ user, onSignedOut }: { user: User; onSignedOut: () => void 
     <AdminSheet visible={adminOpen} onClose={() => setAdminOpen(false)} />
   </SafeAreaView>;
 }
+
+const menuStyles = StyleSheet.create({
+  fab: { position: "absolute", right: 20, bottom: 28, width: 58, height: 58, borderRadius: 29, backgroundColor: COLORS.green, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOpacity: 0.2, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 6 },
+  menu: { position: "absolute", right: 24, minWidth: 200, backgroundColor: COLORS.card, borderRadius: 16, borderWidth: 1, borderColor: COLORS.line, paddingVertical: 6, shadowColor: "#000", shadowOpacity: 0.15, shadowRadius: 14, shadowOffset: { width: 0, height: 6 }, elevation: 8 },
+  item: { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 16, minHeight: 46 },
+  itemText: { fontSize: 15, fontWeight: "600", color: COLORS.ink },
+});
