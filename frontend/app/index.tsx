@@ -8,7 +8,7 @@ import { authorizedRequest, restoreSession, signOut, User } from "@/src/auth";
 import type { Budget, SavingsGoal, Transaction, TxType } from "@/src/dashboard/types";
 import { COLORS, SAVINGS_CATEGORIES, TRANSFERRED_CATEGORIES, categoriesFor, money, monthLabel, nowMonth, shiftMonth } from "@/src/dashboard/constants";
 import { styles, authStyles } from "@/src/dashboard/styles";
-import { Bar, Empty, Metric, TransactionRow } from "@/src/dashboard/primitives";
+import { Bar, Empty, Metric, Nav, TransactionRow } from "@/src/dashboard/primitives";
 import { GoalCard } from "@/src/dashboard/GoalCard";
 import { CategoriesView } from "@/src/dashboard/CategoriesView";
 import { Analytics } from "@/src/dashboard/Analytics";
@@ -235,7 +235,6 @@ function Dashboard({ user, onSignedOut }: { user: User; onSignedOut: () => void 
     <View style={styles.hero}><View style={styles.heroTop}><Text style={styles.heroLabel}>TOTAL BALANCE</Text><Feather name="more-horizontal" size={20} color="#B5C8BE" /></View><Text testID="total-balance" style={[styles.balance, balance < 0 && styles.balanceNeg]}>{balance < 0 ? "-" : ""}{money(balance)}</Text><View style={styles.delta}><Feather name="trending-up" size={13} color="#D7E8DE" /><Text style={styles.deltaText}>{balance < 0 ? "Spending is ahead of income" : "Available after savings"}</Text></View><View style={styles.heroBottom}><Text style={styles.heroSmall}>All time</Text><Text style={styles.heroSmall}>{transactions.length} transactions</Text></View></View>
     {overBudget.length > 0 && <View testID="budget-alert-banner" style={styles.alertBanner}><Feather name="alert-triangle" size={16} color={COLORS.red} /><Text style={styles.alertText}>Over budget on {overBudget.map((x) => x.category).join(", ")}</Text></View>}
     {balance < 0 && <View testID="low-balance-alert" style={styles.lowBalanceCard}><View style={styles.lowBalanceIcon}><Feather name="trending-down" size={18} color={COLORS.red} /></View><View style={{ flex: 1 }}><Text style={styles.lowBalanceTitle}>Balance is in the red</Text><Text style={styles.lowBalanceSub}>You've transferred or saved {money(balance)} more than you've received. Ease up or add income to get back on track.</Text></View></View>}
-    <View style={styles.tabs}>{["Overview", "Analytics", "Categories", "Calendar", "Planning"].map((x) => <Pressable testID={`tab-${x.toLowerCase()}`} key={x} onPress={() => setTab(x)} style={[styles.tab, tab === x && styles.tabActive]}><Text style={[styles.tabText, tab === x && styles.tabTextActive]} numberOfLines={1}>{x}</Text></Pressable>)}</View>
     {loading ? <ActivityIndicator color={COLORS.green} style={styles.loader} /> : tab === "Daily Spends" ? <DailySpendAnalysisTab transactions={transactions} month={month} onMonthChange={setMonth} /> : tab === "Calculator" ? <CalculatorTab /> : tab === "Planning" ? <PlanningTab balance={balance} transactions={transactions} /> : tab === "Checklist" ? <ChecklistTab /> : tab === "Calendar" ? <CalendarView transactions={transactions} onOpenTx={setActionsFor} onAdd={openAdd} /> : tab === "Categories" ? <CategoriesView data={byCategory} max={max} budgetMap={budgetMap} onEditBudget={setBudgetSheet} transactions={transactions} month={month} onMonthChange={setMonth} /> : tab === "Analytics" ? <Analytics spent={spent} income={income} data={byCategory} max={max} transactions={transactions} month={month} onMonthChange={setMonth} /> : <>
       <View style={styles.monthPicker}>
         <Pressable testID="prev-month" onPress={() => setMonth((m) => shiftMonth(m, -1))} style={styles.monthNav}><Feather name="chevron-left" size={18} color={COLORS.ink} /></Pressable>
@@ -253,6 +252,11 @@ function Dashboard({ user, onSignedOut }: { user: User; onSignedOut: () => void 
       <View style={styles.card}><RecentActivityGrouped transactions={recentSorted} onLongPress={setActionsFor} maxGroups={3} /></View>
     </>}
   </ScrollView>
+    <View style={styles.bottom}>
+      {([["home", "Overview"], ["bar-chart-2", "Analytics"], ["pie-chart", "Categories"], ["calendar", "Calendar"], ["flag", "Planning"]] as [keyof typeof Feather.glyphMap, string][]).map(([icon, label]) => (
+        <Nav key={label} icon={icon} label={label} active={tab === label} onPress={() => setTab(label)} />
+      ))}
+    </View>
     <Pressable testID="add-transaction-fab" style={menuStyles.fab} onPress={openAdd}><Feather name="plus" size={26} color="#FFF" /></Pressable>
     <Modal visible={menuOpen} transparent animationType="fade" onRequestClose={() => setMenuOpen(false)}>
       <Pressable testID="profile-menu-backdrop" style={StyleSheet.absoluteFill} onPress={() => setMenuOpen(false)} />
@@ -319,7 +323,7 @@ function Dashboard({ user, onSignedOut }: { user: User; onSignedOut: () => void 
 }
 
 const menuStyles = StyleSheet.create({
-  fab: { position: "absolute", right: 20, bottom: 28, width: 58, height: 58, borderRadius: 29, backgroundColor: COLORS.green, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOpacity: 0.2, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 6 },
+  fab: { position: "absolute", right: 20, bottom: 98, width: 58, height: 58, borderRadius: 29, backgroundColor: COLORS.green, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOpacity: 0.2, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 6 },
   menu: { position: "absolute", right: 24, minWidth: 200, backgroundColor: COLORS.card, borderRadius: 16, borderWidth: 1, borderColor: COLORS.line, paddingVertical: 6, shadowColor: "#000", shadowOpacity: 0.15, shadowRadius: 14, shadowOffset: { width: 0, height: 6 }, elevation: 8 },
   item: { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 16, minHeight: 46 },
   itemText: { fontSize: 15, fontWeight: "600", color: COLORS.ink },
