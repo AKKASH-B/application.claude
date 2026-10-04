@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { router } from "expo-router";
 import { Feather, MaterialCommunityIcons } from "@expo/vector-icons";
@@ -40,14 +40,6 @@ function Dashboard({ user, onSignedOut }: { user: User; onSignedOut: () => void 
   const [month, setMonth] = useState(nowMonth());
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [menuTop, setMenuTop] = useState(90);
-  const avatarRef = useRef<View>(null);
-  const openMenu = () => {
-    // Measure the avatar so the dropdown sits right under it on every screen size.
-    const node = avatarRef.current;
-    if (node && typeof node.measureInWindow === "function") node.measureInWindow((_x, y, _w, h) => { setMenuTop((y || 0) + (h || 44) + 8); setMenuOpen(true); });
-    else setMenuOpen(true);
-  };
   const pickMenu = (action: () => void) => { setMenuOpen(false); setTimeout(action, 60); };
   const [changePwOpen, setChangePwOpen] = useState(false);
   const [recoveryOpen, setRecoveryOpen] = useState(false);
@@ -231,7 +223,7 @@ function Dashboard({ user, onSignedOut }: { user: User; onSignedOut: () => void 
   }, [savingsGoals, savedByGoal, celebrateGoal, markCelebrated]);
 
   return <SafeAreaView style={styles.safe}><ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-    <View style={styles.top}><View style={{ flex: 1 }}><Text style={styles.eyebrow}>PERSONAL FINANCE</Text><Text style={styles.title}>Hi {user.username}</Text><View style={styles.profileMetaRow}><Text style={styles.sectionSub} numberOfLines={1}>{recoveryEmail || user.phone || ""}</Text></View></View><View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}><Pressable ref={avatarRef} collapsable={false} testID="open-profile-menu" onPress={openMenu} style={styles.avatar}><Text style={styles.avatarText}>{user.username.slice(0, 2).toUpperCase()}</Text></Pressable></View></View>
+    <View style={styles.top}><Pressable testID="open-side-menu" onPress={() => setMenuOpen(true)} hitSlop={8} style={menuStyles.burger}><Feather name="menu" size={22} color={COLORS.ink} /></Pressable><View style={{ flex: 1 }}><Text style={styles.eyebrow}>PERSONAL FINANCE</Text><Text style={styles.title}>Hi {user.username}</Text><View style={styles.profileMetaRow}><Text style={styles.sectionSub} numberOfLines={1}>{recoveryEmail || user.phone || ""}</Text></View></View><View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}><Pressable testID="open-settings" onPress={() => setSettingsOpen(true)} style={styles.avatar}><Text style={styles.avatarText}>{user.username.slice(0, 2).toUpperCase()}</Text></Pressable></View></View>
     <View style={styles.hero}><View style={styles.heroTop}><Text style={styles.heroLabel}>TOTAL BALANCE</Text><Feather name="more-horizontal" size={20} color="#B5C8BE" /></View><Text testID="total-balance" style={[styles.balance, balance < 0 && styles.balanceNeg]}>{balance < 0 ? "-" : ""}{money(balance)}</Text><View style={styles.delta}><Feather name="trending-up" size={13} color="#D7E8DE" /><Text style={styles.deltaText}>{balance < 0 ? "Spending is ahead of income" : "Available after savings"}</Text></View><View style={styles.heroBottom}><Text style={styles.heroSmall}>All time</Text><Text style={styles.heroSmall}>{transactions.length} transactions</Text></View></View>
     {overBudget.length > 0 && <View testID="budget-alert-banner" style={styles.alertBanner}><Feather name="alert-triangle" size={16} color={COLORS.red} /><Text style={styles.alertText}>Over budget on {overBudget.map((x) => x.category).join(", ")}</Text></View>}
     {balance < 0 && <View testID="low-balance-alert" style={styles.lowBalanceCard}><View style={styles.lowBalanceIcon}><Feather name="trending-down" size={18} color={COLORS.red} /></View><View style={{ flex: 1 }}><Text style={styles.lowBalanceTitle}>Balance is in the red</Text><Text style={styles.lowBalanceSub}>You've transferred or saved {money(balance)} more than you've received. Ease up or add income to get back on track.</Text></View></View>}
@@ -259,20 +251,28 @@ function Dashboard({ user, onSignedOut }: { user: User; onSignedOut: () => void 
     </View>
     <Pressable testID="add-transaction-fab" style={menuStyles.fab} onPress={openAdd}><Feather name="plus" size={26} color="#FFF" /></Pressable>
     <Modal visible={menuOpen} transparent animationType="fade" onRequestClose={() => setMenuOpen(false)}>
-      <Pressable testID="profile-menu-backdrop" style={StyleSheet.absoluteFill} onPress={() => setMenuOpen(false)} />
-      <View style={[menuStyles.menu, { top: menuTop }]}>
-        {([
-          ["trending-down", "Daily Spends", () => setTab("Daily Spends")],
-          ["divide", "Calculator", () => setTab("Calculator")],
-          ["check-square", "Checklist", () => setTab("Checklist")],
-          ["users", "Splits", () => router.push("/splits")],
-          ["settings", "Settings", () => setSettingsOpen(true)],
-        ] as [keyof typeof Feather.glyphMap, string, () => void][]).map(([icon, label, action]) => (
-          <Pressable key={label} testID={`menu-${label.toLowerCase().replace(/\s+/g, "-")}`} onPress={() => pickMenu(action)} style={({ pressed }) => [menuStyles.item, pressed && { backgroundColor: COLORS.pale }]}>
-            <Feather name={icon} size={18} color={tab === label ? COLORS.green : COLORS.ink} />
-            <Text style={[menuStyles.itemText, tab === label && { color: COLORS.green }]}>{label}</Text>
-          </Pressable>
-        ))}
+      <View style={menuStyles.drawerWrap}>
+        <View style={menuStyles.drawer}>
+          <View style={menuStyles.drawerHead}>
+            <View style={{ flex: 1 }}>
+              <Text style={menuStyles.drawerBrand}>SpendPulse</Text>
+              <Text style={menuStyles.drawerUser} numberOfLines={1}>{user.username}</Text>
+            </View>
+            <Pressable testID="close-side-menu" onPress={() => setMenuOpen(false)} hitSlop={10}><Feather name="x" size={22} color={COLORS.muted} /></Pressable>
+          </View>
+          {([
+            ["trending-down", "Daily Spends", () => setTab("Daily Spends")],
+            ["divide", "Calculator", () => setTab("Calculator")],
+            ["check-square", "Checklist", () => setTab("Checklist")],
+            ["users", "Splits", () => router.push("/splits")],
+          ] as [keyof typeof Feather.glyphMap, string, () => void][]).map(([icon, label, action]) => (
+            <Pressable key={label} testID={`menu-${label.toLowerCase().replace(/\s+/g, "-")}`} onPress={() => pickMenu(action)} style={({ pressed }) => [menuStyles.item, tab === label && { backgroundColor: COLORS.pale }, pressed && { backgroundColor: COLORS.pale }]}>
+              <Feather name={icon} size={20} color={tab === label ? COLORS.green : COLORS.ink} />
+              <Text style={[menuStyles.itemText, tab === label && { color: COLORS.green }]}>{label}</Text>
+            </Pressable>
+          ))}
+        </View>
+        <Pressable testID="side-menu-backdrop" style={menuStyles.backdrop} onPress={() => setMenuOpen(false)} />
       </View>
     </Modal>
     <Modal visible={editorOpen} transparent animationType="slide" onRequestClose={closeEditor}><KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.modalShade}><View style={[styles.modal, { maxHeight: "92%" }]}><ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} contentContainerStyle={{ gap: 12, paddingBottom: 8 }}><View style={styles.modalHead}><Text style={styles.modalTitle}>{editing ? "Edit transaction" : "Add transaction"}</Text><Pressable testID="close-add-transaction" onPress={closeEditor}><Feather name="x" size={22} color={COLORS.muted} /></Pressable></View><View style={styles.typeRow}><Pressable testID="type-expense" onPress={() => chooseType("expense")} style={[styles.type, form.type === "expense" && styles.typeExpense]}><Text style={[styles.typeText, form.type === "expense" && { color: COLORS.red }]} numberOfLines={1}>Transferred</Text></Pressable><Pressable testID="type-income" onPress={() => chooseType("income")} style={[styles.type, form.type === "income" && styles.typeIncome]}><Text style={[styles.typeText, form.type === "income" && { color: COLORS.green }]} numberOfLines={1}>Received</Text></Pressable><Pressable testID="type-savings" onPress={() => chooseType("savings")} style={[styles.type, form.type === "savings" && styles.typeSavings]}><Text style={[styles.typeText, form.type === "savings" && { color: COLORS.gold }]} numberOfLines={1}>Savings</Text></Pressable></View><Text style={styles.inputLabel}>AMOUNT</Text><View style={styles.amountRow}><TextInput testID="transaction-amount" maxLength={13} value={form.amount} onChangeText={(amount) => setForm({ ...form, amount })} keyboardType="decimal-pad" placeholder="₹ 0" placeholderTextColor="#A9AAA5" style={[styles.input, { flex: 1 }]} /><Pressable testID="open-calculator" onPress={() => setCalcOpen(true)} style={styles.calcBtn}><MaterialCommunityIcons name="calculator-variant-outline" size={22} color={COLORS.green} /></Pressable></View><Text style={styles.inputLabel}>DATE</Text><Pressable testID="open-date-picker" onPress={() => setDatePickerOpen(true)} style={styles.dateField}><Feather name="calendar" size={18} color={COLORS.green} /><Text style={styles.dateFieldText}>{prettyDate(form.date)}</Text><Feather name="chevron-down" size={18} color={COLORS.muted} /></Pressable>{form.type === "savings" && savingsGoals.length > 0 ? <><Text style={styles.inputLabel}>ADD TO GOAL</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>{savingsGoals.map((g) => <Pressable testID={`goal-chip-${g.id}`} key={g.id} onPress={() => setForm({ ...form, goalId: g.id, category: g.name })} style={[styles.chip, form.goalId === g.id && styles.chipActive]}><Text style={[styles.chipText, form.goalId === g.id && styles.chipTextActive]}>{g.name}</Text></Pressable>)}<Pressable testID="goal-chip-general" onPress={() => setForm({ ...form, goalId: null, category: "General" })} style={[styles.chip, form.goalId === null && styles.chipActive]}><Text style={[styles.chipText, form.goalId === null && styles.chipTextActive]}>General</Text></Pressable></ScrollView></> : <><Text style={styles.inputLabel}>CATEGORY</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>{categoriesFor(form.type).map((c) => <Pressable testID={`category-${c.toLowerCase().replace(/\s+/g, "-")}`} key={c} onPress={() => setForm({ ...form, category: c })} style={[styles.chip, form.category === c && styles.chipActive]}><Text style={[styles.chipText, form.category === c && styles.chipTextActive]}>{c}</Text></Pressable>)}</ScrollView></>}<Text style={styles.inputLabel}>NOTE</Text><TextInput value={form.note} onChangeText={(note) => setForm({ ...form, note })} placeholder="Optional note" placeholderTextColor="#A9AAA5" maxLength={120} style={styles.input} /><Pressable testID="save-transaction" onPress={submitTransaction} style={styles.save}><Text style={styles.saveText}>{editing ? "Save changes" : "Save transaction"}</Text></Pressable>{!editing && form.type === "expense" ? <Pressable testID="split-from-form" onPress={handleSplitTap} style={styles.remove}><Text style={authStyles.linkText}>Split this with friends</Text></Pressable> : null}</ScrollView></View>
@@ -324,7 +324,13 @@ function Dashboard({ user, onSignedOut }: { user: User; onSignedOut: () => void 
 
 const menuStyles = StyleSheet.create({
   fab: { position: "absolute", right: 20, bottom: 98, width: 58, height: 58, borderRadius: 29, backgroundColor: COLORS.green, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOpacity: 0.2, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 6 },
-  menu: { position: "absolute", right: 24, minWidth: 200, backgroundColor: COLORS.card, borderRadius: 16, borderWidth: 1, borderColor: COLORS.line, paddingVertical: 6, shadowColor: "#000", shadowOpacity: 0.15, shadowRadius: 14, shadowOffset: { width: 0, height: 6 }, elevation: 8 },
-  item: { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 16, minHeight: 46 },
+  burger: { width: 42, height: 42, borderRadius: 13, backgroundColor: COLORS.card, borderWidth: 1, borderColor: COLORS.line, alignItems: "center", justifyContent: "center", marginRight: 12 },
+  drawerWrap: { flex: 1, flexDirection: "row" },
+  drawer: { width: 290, maxWidth: "82%", backgroundColor: COLORS.bg, paddingTop: 56, paddingHorizontal: 14, gap: 4, shadowColor: "#000", shadowOpacity: 0.2, shadowRadius: 16, shadowOffset: { width: 4, height: 0 }, elevation: 12 },
+  backdrop: { flex: 1, backgroundColor: "rgba(28,28,30,0.45)" },
+  drawerHead: { flexDirection: "row", alignItems: "center", paddingHorizontal: 8, paddingBottom: 18 },
+  drawerBrand: { fontSize: 20, fontWeight: "800", color: COLORS.ink },
+  drawerUser: { fontSize: 13, color: COLORS.muted, marginTop: 2 },
+  item: { flexDirection: "row", alignItems: "center", gap: 14, paddingHorizontal: 12, minHeight: 50, borderRadius: 14 },
   itemText: { fontSize: 15, fontWeight: "600", color: COLORS.ink },
 });
