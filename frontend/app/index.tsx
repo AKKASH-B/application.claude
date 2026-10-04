@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { router } from "expo-router";
 import { Feather, MaterialCommunityIcons } from "@expo/vector-icons";
@@ -44,6 +44,8 @@ function Dashboard({ user, onSignedOut }: { user: User; onSignedOut: () => void 
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
+  const lastHeroTap = useRef(0);
+  const onHeroTap = () => { const now = Date.now(); if (now - lastHeroTap.current < 350) { lastHeroTap.current = 0; setAccount((a) => (a === "card" ? "primary" : "card")); } else lastHeroTap.current = now; }; // double-tap the card to switch accounts
   const [hideBalance, setHideBalance] = useState(false); // private mode masks the balance on the card
   const pickMenu = (action: () => void) => { setMenuOpen(false); setTimeout(action, 60); };
   const [changePwOpen, setChangePwOpen] = useState(false);
@@ -240,7 +242,7 @@ function Dashboard({ user, onSignedOut }: { user: User; onSignedOut: () => void 
   return <SafeAreaView style={styles.safe}><ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
     <View style={styles.top}><Pressable testID="open-side-menu" onPress={() => setMenuOpen(true)} hitSlop={8} style={menuStyles.burger}><Feather name="menu" size={22} color={COLORS.ink} /></Pressable><View style={{ flex: 1, justifyContent: "center" }}><Text style={styles.eyebrow}>PERSONAL FINANCE</Text></View><View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}><Pressable testID="open-profile" onPress={() => setProfileOpen(true)} style={styles.avatar}><Text style={styles.avatarText}>{user.username.slice(0, 2).toUpperCase()}</Text></Pressable></View></View>
     {isCard ? (
-    <View style={[styles.hero, isCard ? heroStyles.cardBg : heroStyles.balanceBg, { overflow: "hidden" }]}>
+    <Pressable testID="credit-card-hero" accessibilityLabel="Credit card. Double tap to switch to balance card" onPress={onHeroTap} style={[styles.hero, heroStyles.cardBg, heroStyles.bigCard]}>
       <>
         <View pointerEvents="none" style={[heroStyles.orb, { width: 260, height: 260, borderRadius: 130, top: -120, right: -80, backgroundColor: "rgba(212,175,90,0.16)" }]} />
         <View pointerEvents="none" style={[heroStyles.orb, { width: 160, height: 160, borderRadius: 80, top: -60, right: -20, backgroundColor: "rgba(212,175,90,0.16)" }]} />
@@ -248,9 +250,6 @@ function Dashboard({ user, onSignedOut }: { user: User; onSignedOut: () => void 
       </>
       <View style={styles.heroTop}>
         <Text style={[styles.heroLabel, isCard && { color: "#E2C275" }]}>{isCard ? `CREDIT CARD · ${monthLabel(month).toUpperCase()}` : "TOTAL BALANCE"}</Text>
-        <Pressable testID="switch-account" accessibilityLabel={isCard ? "Switch to primary account" : "Switch to credit card"} onPress={() => setAccount(isCard ? "primary" : "card")} hitSlop={8} style={[heroStyles.switchBtn, isCard && { backgroundColor: "#E2C275" }]}>
-          <Feather name="credit-card" size={24} color={isCard ? "#0B0B0D" : "#FFFFFF"} />
-        </Pressable>
       </View>
       {isCard
         ? <Text testID="card-spent" style={styles.balance}>{money(spent)}</Text>
@@ -262,9 +261,9 @@ function Dashboard({ user, onSignedOut }: { user: User; onSignedOut: () => void 
       <View style={styles.heroBottom}>
         <Text style={[styles.heroSmall, isCard && { color: "#BDB59F" }]}>{transactions.length} {transactions.length === 1 ? "transaction" : "transactions"}</Text>
       </View>
-    </View>
+    </Pressable>
     ) : (
-    <View testID="balance-card" style={[styles.hero, heroStyles.balanceBg, heroStyles.debitCard]}>
+    <Pressable testID="balance-card" accessibilityLabel="Balance card. Double tap to switch to credit card" onPress={onHeroTap} style={[styles.hero, heroStyles.balanceBg, heroStyles.debitCard, heroStyles.bigCard]}>
       <View pointerEvents="none" style={[heroStyles.orb, { width: 180, height: 180, borderRadius: 90, top: -70, right: -50, backgroundColor: "rgba(255,255,255,0.12)" }]} />
       <View pointerEvents="none" style={[heroStyles.orb, { width: 240, height: 240, borderRadius: 120, top: 40, right: -150, backgroundColor: "rgba(255,255,255,0.07)" }]} />
       <View pointerEvents="none" style={[heroStyles.orb, { width: 260, height: 260, borderRadius: 130, bottom: -170, left: -90, backgroundColor: "rgba(255,255,255,0.07)" }]} />
@@ -277,21 +276,18 @@ function Dashboard({ user, onSignedOut }: { user: User; onSignedOut: () => void 
           <View style={heroStyles.simChip}><View style={heroStyles.simLineH} /><View style={heroStyles.simLineV} /></View>
           <Feather name="wifi" size={22} color="rgba(255,255,255,0.85)" style={{ transform: [{ rotate: "90deg" }] }} />
         </View>
-        <Pressable testID="switch-account" accessibilityLabel="Switch to credit card" onPress={() => setAccount("card")} hitSlop={8} style={heroStyles.switchBtn}>
-          <Feather name="credit-card" size={24} color="#FFFFFF" />
-        </Pressable>
       </View>
-      <View style={heroStyles.cardRow}>
-        <Text testID="total-balance" style={[styles.balance, balance < 0 && !hideBalance && styles.balanceNeg]} numberOfLines={1} adjustsFontSizeToFit>{hideBalance ? "••••••" : `${balance < 0 ? "-" : ""}${money(balance)}`}</Text>
+      <View style={heroStyles.balanceRow}>
+        <Text testID="total-balance" style={[styles.balance, balance < 0 && !hideBalance && styles.balanceNeg, { flexShrink: 1 }]} numberOfLines={1} adjustsFontSizeToFit>{hideBalance ? "••••••" : `${balance < 0 ? "-" : ""}${money(balance)}`}</Text>
         <Pressable testID="toggle-balance-privacy" accessibilityLabel={hideBalance ? "Show balance" : "Hide balance"} onPress={() => setHideBalance((v) => !v)} hitSlop={10} style={heroStyles.eyeBtn}>
-          <Feather name={hideBalance ? "eye-off" : "eye"} size={20} color="#FFFFFF" />
+          <Feather name={hideBalance ? "eye-off" : "eye"} size={15} color="#FFFFFF" />
         </Pressable>
       </View>
       <View style={heroStyles.cardRow}>
         <Text style={heroStyles.cardName} numberOfLines={1}>{user.username}</Text>
         <Text style={styles.heroSmall}>{transactions.length} {transactions.length === 1 ? "transaction" : "transactions"}</Text>
       </View>
-    </View>
+    </Pressable>
     )}
     {!isCard && overBudget.length > 0 && <View testID="budget-alert-banner" style={styles.alertBanner}><Feather name="alert-triangle" size={16} color={COLORS.red} /><Text style={styles.alertText}>Over budget on {overBudget.map((x) => x.category).join(", ")}</Text></View>}
     {!isCard && balance < 0 && <View testID="low-balance-alert" style={styles.lowBalanceCard}><View style={styles.lowBalanceIcon}><Feather name="trending-down" size={18} color={COLORS.red} /></View><View style={{ flex: 1 }}><Text style={styles.lowBalanceTitle}>Balance is in the red</Text><Text style={styles.lowBalanceSub}>You've transferred or saved {money(balance)} more than you've received. Ease up or add income to get back on track.</Text></View></View>}
@@ -411,14 +407,16 @@ const menuStyles = StyleSheet.create({
 
 const heroStyles = StyleSheet.create({
   balanceBg: { backgroundColor: "#3F5F52" },
-  debitCard: { overflow: "hidden", minHeight: 210, gap: 10 },
+  debitCard: { gap: 10 },
   cardRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   cardBrand: { color: "#FFFFFF", fontSize: 17, fontWeight: "800", letterSpacing: 0.5 },
   chipRow: { flexDirection: "row", alignItems: "center", gap: 12 },
   simChip: { width: 42, height: 31, borderRadius: 7, backgroundColor: "#D9B35E", borderWidth: 1, borderColor: "rgba(0,0,0,0.2)", overflow: "hidden" },
   simLineH: { position: "absolute", left: 0, right: 0, top: 15, height: 1, backgroundColor: "rgba(0,0,0,0.28)" },
   simLineV: { position: "absolute", top: 0, bottom: 0, left: 15, width: 1, backgroundColor: "rgba(0,0,0,0.28)" },
-  eyeBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: "rgba(255,255,255,0.18)", alignItems: "center", justifyContent: "center", marginLeft: 8 },
+  eyeBtn: { width: 28, height: 28, borderRadius: 14, backgroundColor: "rgba(255,255,255,0.18)", alignItems: "center", justifyContent: "center", marginLeft: 10 },
+  balanceRow: { flexDirection: "row", alignItems: "center" },
+  bigCard: { minHeight: 250, padding: 24, overflow: "hidden", justifyContent: "space-between" },
   cardName: { color: "#FFFFFF", fontSize: 13, fontWeight: "700", letterSpacing: 1.2, textTransform: "uppercase", flex: 1, marginRight: 10 },
   cardBg: { backgroundColor: "#0E0E10" },
   orb: { position: "absolute" },
