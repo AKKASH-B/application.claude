@@ -11,7 +11,7 @@ import os
 import re
 import logging
 from pathlib import Path
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Any, List, Literal, Optional
 import uuid
 import secrets
@@ -436,6 +436,16 @@ class ChecklistItem(BaseModel):
     id: str = Field(min_length=1, max_length=64)
     text: str = Field(min_length=1, max_length=80)
     done: bool = False
+    amount: float = Field(default=0, ge=0, le=MAX_AMOUNT)  # money to pay (0 = a plain to-do item)
+    paid: float = Field(default=0, ge=0, le=MAX_AMOUNT)    # money already paid towards it
+
+    @model_validator(mode="after")
+    def check_paid(self):
+        if self.paid > self.amount:
+            raise ValueError("Paid can't be more than the amount to pay.")
+        if self.amount > 0:
+            self.done = self.paid >= self.amount  # an item with an amount is done exactly when fully paid
+        return self
 
     @field_validator("text")
     @classmethod

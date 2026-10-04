@@ -6,4 +6,4 @@ export type SavingsGoal = { id: string; name: string; target: number; target_dat
 export type PlanKind = "expense" | "savings" | "income";
 export type PlanItem = { id: string; kind: PlanKind; label: string; amount: number };
 export type Plan = { month: string; items: PlanItem[]; updated_at?: string | null };
-export type ChecklistItem = { id: string; text: string; done: boolean };
+export type ChecklistItem = { id: string; text: string; done: boolean; amount?: number; paid?: number };
