@@ -8,7 +8,7 @@ import { authorizedRequest, restoreSession, signOut, User } from "@/src/auth";
 import type { Budget, SavingsGoal, Transaction, TxType } from "@/src/dashboard/types";
 import { COLORS, SAVINGS_CATEGORIES, TRANSFERRED_CATEGORIES, categoriesFor, money, monthLabel, nowMonth, shiftMonth } from "@/src/dashboard/constants";
 import { styles, authStyles } from "@/src/dashboard/styles";
-import { Bar, Empty, Metric, Nav, TransactionRow } from "@/src/dashboard/primitives";
+import { Bar, Empty, Metric, TransactionRow } from "@/src/dashboard/primitives";
 import { GoalCard } from "@/src/dashboard/GoalCard";
 import { CategoriesView } from "@/src/dashboard/CategoriesView";
 import { Analytics } from "@/src/dashboard/Analytics";
@@ -244,11 +244,6 @@ function Dashboard({ user, onSignedOut }: { user: User; onSignedOut: () => void 
       <View style={styles.card}><RecentActivityGrouped transactions={recentSorted} onLongPress={setActionsFor} maxGroups={3} /></View>
     </>}
   </ScrollView>
-    <View style={styles.bottom}>
-      {([["home", "Overview"], ["bar-chart-2", "Analytics"], ["pie-chart", "Categories"], ["calendar", "Calendar"], ["flag", "Planning"]] as [keyof typeof Feather.glyphMap, string][]).map(([icon, label]) => (
-        <Nav key={label} icon={icon} label={label} active={tab === label} onPress={() => setTab(label)} />
-      ))}
-    </View>
     <Pressable testID="add-transaction-fab" style={menuStyles.fab} onPress={openAdd}><Feather name="plus" size={26} color="#FFF" /></Pressable>
     <Modal visible={menuOpen} transparent animationType="fade" onRequestClose={() => setMenuOpen(false)}>
       <View style={menuStyles.drawerWrap}>
@@ -261,6 +256,11 @@ function Dashboard({ user, onSignedOut }: { user: User; onSignedOut: () => void 
             <Pressable testID="close-side-menu" onPress={() => setMenuOpen(false)} hitSlop={10}><Feather name="x" size={22} color={COLORS.muted} /></Pressable>
           </View>
           {([
+            ["home", "Overview", () => setTab("Overview")],
+            ["bar-chart-2", "Analytics", () => setTab("Analytics")],
+            ["pie-chart", "Categories", () => setTab("Categories")],
+            ["calendar", "Calendar", () => setTab("Calendar")],
+            ["flag", "Planning", () => setTab("Planning")],
             ["trending-down", "Daily Spends", () => setTab("Daily Spends")],
             ["divide", "Calculator", () => setTab("Calculator")],
             ["check-square", "Checklist", () => setTab("Checklist")],
@@ -323,7 +323,7 @@ function Dashboard({ user, onSignedOut }: { user: User; onSignedOut: () => void 
 }
 
 const menuStyles = StyleSheet.create({
-  fab: { position: "absolute", right: 20, bottom: 98, width: 58, height: 58, borderRadius: 29, backgroundColor: COLORS.green, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOpacity: 0.2, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 6 },
+  fab: { position: "absolute", right: 20, bottom: 28, width: 58, height: 58, borderRadius: 29, backgroundColor: COLORS.green, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOpacity: 0.2, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 6 },
   burger: { width: 42, height: 42, borderRadius: 13, backgroundColor: COLORS.card, borderWidth: 1, borderColor: COLORS.line, alignItems: "center", justifyContent: "center", marginRight: 12 },
   drawerWrap: { flex: 1, flexDirection: "row" },
   drawer: { width: 290, maxWidth: "82%", backgroundColor: COLORS.bg, paddingTop: 56, paddingHorizontal: 14, gap: 4, shadowColor: "#000", shadowOpacity: 0.2, shadowRadius: 16, shadowOffset: { width: 4, height: 0 }, elevation: 12 },
