@@ -328,6 +328,8 @@ class TransactionCreate(BaseModel):
     note: Optional[str] = Field(default="", max_length=120)
     date: str = Field(min_length=10, max_length=10)
     goal_id: Optional[str] = Field(default=None, max_length=64)
+    # "primary" is the normal account; "card" is the credit-card account, which only tracks spending.
+    account: Literal["primary", "card"] = "primary"
 
     @field_validator("date")
     @classmethod
@@ -337,6 +339,14 @@ class TransactionCreate(BaseModel):
         except ValueError as exc:
             raise ValueError("date must be a valid YYYY-MM-DD date") from exc
         return value
+
+    @model_validator(mode="after")
+    def card_is_spending_only(self):
+        if self.account == "card":
+            if self.type != "expense":
+                raise ValueError("The credit card account only tracks spending.")
+            self.goal_id = None
+        return self
 
 
 class Transaction(TransactionCreate):
@@ -1060,7 +1070,7 @@ async def export_transactions(month: Optional[str] = None, user: dict[str, Any] 
             raise HTTPException(status_code=400, detail="month must be YYYY-MM")
         query["date"] = {"$regex": f"^{month}"}
     docs = await db.transactions.find(query, {"_id": 0, "owner_id": 0}).sort("date", -1).to_list(5000)
-    lines = ["date,type,category,amount,note"]
+    lines = ["date,type,category,amount,note,account"]
     def cell(value: Any) -> str:
         # Quote every text cell and neutralise spreadsheet formulas (=, +, -, @) so a crafted
         # note can't run as a formula when the CSV is opened in Excel/Sheets.
@@ -1070,7 +1080,7 @@ async def export_transactions(month: Optional[str] = None, user: dict[str, Any] 
         return f'"{text}"'
 
     for d in docs:
-        lines.append(f'{d["date"]},{d["type"]},{cell(d.get("category"))},{d["amount"]},{cell(d.get("note"))}')
+        lines.append(f'{d["date"]},{d["type"]},{cell(d.get("category"))},{d["amount"]},{cell(d.get("note"))},{d.get("account", "primary")}')
     csv = "\n".join(lines) + "\n"
     return PlainTextResponse(content=csv, media_type="text/csv", headers={"Content-Disposition": f'attachment; filename="spendpulse-{month or "all"}.csv"'})
 
@@ -1242,7 +1252,7 @@ async def admin_list_users(admin: dict[str, Any] = Depends(current_admin)):
     for u in users:
         await _ensure_role(u)
         txs = await db.transactions.find({"owner_id": u["id"]}, {"_id": 0, "type": 1, "amount": 1}).to_list(10000)
-        balance = sum(t["amount"] if t["type"] == "income" else -t["amount"] for t in txs)  # expenses and savings both reduce the balance
+        balance = sum(t["amount"] if t["type"] == "income" else -t["amount"] for t in txs if t.get("account", "primary") != "card")  # expenses and savings both reduce the balance
         summaries.append(AdminUserSummary(
             id=u["id"], username=u.get("username") or "user", email=u.get("email") or "", phone=u.get("phone") or "",
             role=u.get("role") or "user", disabled=bool(u.get("disabled")),
@@ -1433,6 +1443,7 @@ async def create_split(input: SplitSessionCreate, user: dict[str, Any] = Depends
             "note": " · ".join(note_parts)[:120],
             "date": input.date or datetime.now(timezone.utc).date().isoformat(),
             "goal_id": None,
+            "account": "primary",
             "created_at": now_iso,
             "owner_id": user["id"],
         }
